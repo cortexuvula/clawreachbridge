@@ -152,6 +152,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// When either direction finishes, cancel context to tear down the other side.
 	// context.CancelFunc is safe to call multiple times.
 	proxyCtx, proxyCancel := context.WithCancel(context.Background())
+
+	// Guard CloseNow with sync.Once — context cancellation can trigger
+	// internal closes in coder/websocket concurrently with our cleanup.
+	var closeClientOnce, closeGatewayOnce sync.Once
+	closeClient := func() { closeClientOnce.Do(func() { clientConn.CloseNow() }) }
+	closeGateway := func() { closeGatewayOnce.Do(func() { gatewayConn.CloseNow() }) }
+
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() {
@@ -169,8 +176,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		start := time.Now()
 		wg.Wait()
-		clientConn.CloseNow()
-		gatewayConn.CloseNow()
+		closeClient()
+		closeGateway()
 		h.Proxy.DecrementConnections(clientIP)
 		if h.Metrics != nil {
 			h.Metrics.ActiveConnections.Dec()
