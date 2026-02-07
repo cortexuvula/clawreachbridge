@@ -58,6 +58,7 @@ internal/
   security/                    — Tailscale IP validation, per-IP rate limiting (token bucket), optional auth tokens
   health/                      — /health JSON endpoint (uptime, active connections, gateway reachability)
   logging/                     — Structured JSON logging setup
+  metrics/                     — Prometheus metrics (connections, messages, errors, gateway reachability)
 test/
   integration/                 — Integration tests (build tag: integration)
   loadtest/                    — WebSocket load testing tools
@@ -80,6 +81,7 @@ configs/                       — config.example.yaml
 - `gopkg.in/yaml.v3` — YAML parsing
 - `golang.org/x/time/rate` — Token bucket rate limiting
 - `gopkg.in/natefinch/lumberjack.v2` — Log rotation
+- `github.com/prometheus/client_golang` — Prometheus metrics (optional)
 - Logging: `logrus` or `zap` (TBD)
 - CLI: `cobra`/`viper` (optional)
 

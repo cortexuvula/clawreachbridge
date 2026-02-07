@@ -1,0 +1,59 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - name: Build all platforms
+        env:
+          VERSION_TAG: ${{ github.ref_name }}
+        run: |
+          BUILD_TIME=$(date -u '+%Y-%m-%d_%H:%M:%S')
+          GIT_COMMIT=$(git rev-parse HEAD)
+          LDFLAGS="-s -w -X main.Version=${VERSION_TAG} -X main.BuildTime=${BUILD_TIME} -X main.GitCommit=${GIT_COMMIT}"
+
+          mkdir -p dist
+
+          platforms=(
+            "linux/amd64"
+            "linux/arm64"
+            "linux/arm/7"
+            "darwin/amd64"
+            "darwin/arm64"
+          )
+
+          for platform in "${platforms[@]}"; do
+            IFS='/' read -r GOOS GOARCH GOARM_VAL <<< "${platform}"
+            output="clawreachbridge-${GOOS}-${GOARCH}"
+            if [ -n "${GOARM_VAL:-}" ]; then
+              output="clawreachbridge-${GOOS}-armv${GOARM_VAL}"
+              export GOARM="${GOARM_VAL}"
+            fi
+            echo "Building ${output}..."
+            GOOS="${GOOS}" GOARCH="${GOARCH}" go build -ldflags="${LDFLAGS}" -o "dist/${output}" ./cmd/clawreachbridge
+            unset GOARM
+          done
+
+          cd dist && sha256sum * > checksums.txt
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

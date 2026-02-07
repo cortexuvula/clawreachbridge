@@ -1,5 +1,6 @@
-# Binaries
-clawreachbridge
+# Binaries (root only, not subdirectories)
+/clawreachbridge
+/loadtest
 *.exe
 *.exe~
 *.dll

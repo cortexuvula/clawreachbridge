@@ -1,0 +1,68 @@
+# ClawReach Bridge Configuration
+# Copy this file to /etc/clawreachbridge/config.yaml and adjust settings.
+# Environment variables override file settings (CLAWREACH_ prefix).
+
+bridge:
+  # Listen address (should be Tailscale IP)
+  listen_address: "100.x.x.x:8080"
+
+  # OpenClaw Gateway upstream (http:// or https://)
+  # The bridge auto-converts to ws:// or wss:// for WebSocket dialing
+  gateway_url: "http://localhost:18800"
+
+  # Origin header to inject
+  origin: "https://gateway.local"
+
+  # Shutdown settings
+  drain_timeout: "30s"       # wait for active connections to finish on SIGTERM/SIGINT
+
+  # WebSocket settings
+  max_message_size: 1048576  # 1MB max WebSocket message size
+  ping_interval: "30s"       # send ping frames to detect dead peers
+  pong_timeout: "10s"        # close connection if pong not received within this window
+  write_timeout: "10s"       # deadline for writing a single message
+  dial_timeout: "10s"        # timeout for dialing upstream Gateway
+
+  # TLS settings (optional, usually not needed with Tailscale)
+  tls:
+    enabled: false
+    cert_file: ""
+    key_file: ""
+
+security:
+  # Only allow Tailscale IPs (IPv4: 100.64.0.0/10, IPv6: fd7a:115c:a1e0::/48)
+  tailscale_only: true
+
+  # Optional auth token
+  # Clients should provide via Authorization: Bearer <token> header (preferred)
+  # or ?token=xxx query parameter (fallback for development/testing)
+  auth_token: ""
+
+  # Rate limiting
+  rate_limit:
+    enabled: true
+    connections_per_minute: 60
+    messages_per_second: 100
+
+  # Connection limits
+  max_connections: 1000
+  max_connections_per_ip: 10
+
+logging:
+  level: "info"  # debug, info, warn, error
+  format: "json"  # json or text
+  file: ""  # Empty = stdout, or path to log file
+  # Log rotation (only when file is set)
+  max_size_mb: 100     # max size in MB before rotation
+  max_backups: 3       # number of old log files to retain
+  max_age_days: 28     # max days to retain old log files
+  compress: true       # gzip rotated log files
+
+health:
+  enabled: true
+  endpoint: "/health"
+  listen_address: "127.0.0.1:8081"  # Separate listener for health/metrics (accessible without Tailscale)
+
+monitoring:
+  metrics_enabled: false
+  metrics_endpoint: "/metrics"  # Served on health listener (127.0.0.1:8081), not proxy listener

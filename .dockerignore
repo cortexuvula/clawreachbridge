@@ -1,0 +1,10 @@
+.git
+dist/
+*.md
+!README.md
+LICENSE
+.github/
+.vscode/
+*.log
+dev-config.yaml
+coverage.*

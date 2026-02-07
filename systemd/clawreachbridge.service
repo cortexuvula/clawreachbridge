@@ -1,0 +1,38 @@
+[Unit]
+Description=ClawReach Bridge - Secure WebSocket Proxy
+Documentation=https://github.com/cortexuvula/clawreachbridge
+After=network-online.target tailscaled.service
+Wants=network-online.target
+Requires=tailscaled.service
+
+[Service]
+Type=notify
+User=clawreachbridge
+Group=clawreachbridge
+ExecStart=/usr/local/bin/clawreachbridge start --config /etc/clawreachbridge/config.yaml
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=5s
+WatchdogSec=30s
+
+# Security hardening
+ProtectSystem=strict
+ProtectHome=true
+NoNewPrivileges=true
+PrivateTmp=true
+ReadOnlyPaths=/etc/clawreachbridge
+LogsDirectory=clawreachbridge
+StateDirectory=clawreachbridge
+LimitNOFILE=65535
+
+# Memory safety net: ~15MB base + ~20KB/connection × 1000 max = ~35MB typical
+# Set headroom for message buffering spikes (max_message_size × active conns)
+MemoryMax=128M
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=clawreachbridge
+
+[Install]
+WantedBy=multi-user.target
