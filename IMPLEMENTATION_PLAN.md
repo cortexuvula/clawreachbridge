@@ -512,7 +512,7 @@ func (h *HealthHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 #### 4.1 One-Line Install (Linux/macOS)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/cortexuvula/clawreachbridge/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/cortexuvula/clawreachbridge/master/scripts/install.sh | bash
 ```
 
 **Install script does:**

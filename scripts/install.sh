@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # ClawReach Bridge Installation Script
-# Usage: curl -fsSL https://raw.githubusercontent.com/cortexuvula/clawreachbridge/main/scripts/install.sh | bash
+# Usage: curl -fsSL https://raw.githubusercontent.com/cortexuvula/clawreachbridge/master/scripts/install.sh | bash
 
 REPO="cortexuvula/clawreachbridge"
 INSTALL_DIR="/usr/local/bin"

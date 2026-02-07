@@ -19,7 +19,7 @@ ClawReach Bridge acts as a trusted proxy between ClawReach clients and OpenClaw 
 
 ```bash
 # Install (Linux/macOS)
-curl -fsSL https://raw.githubusercontent.com/cortexuvula/clawreachbridge/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/cortexuvula/clawreachbridge/master/scripts/install.sh | bash
 
 # Or download binary from releases
 wget https://github.com/cortexuvula/clawreachbridge/releases/latest/download/clawreachbridge-linux-amd64
