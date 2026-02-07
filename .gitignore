@@ -11,6 +11,10 @@ clawreachbridge
 
 # Output of the go coverage tool
 *.out
+coverage.html
+
+# Profiling
+*.prof
 
 # Go workspace file
 go.work
@@ -24,6 +28,7 @@ bin/
 config.yaml
 config.yml
 *.local.yaml
+dev-*.yaml
 
 # Logs
 *.log

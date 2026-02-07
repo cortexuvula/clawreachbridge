@@ -33,7 +33,7 @@ clawreachbridge setup
 sudo systemctl start clawreachbridge
 
 # Check status
-curl http://$(tailscale ip -4):8080/health
+curl http://127.0.0.1:8081/health
 ```
 
 ## Architecture

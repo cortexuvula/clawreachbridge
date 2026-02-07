@@ -44,6 +44,9 @@ clawreachbridge/
 │   ├── security/          # Auth, rate limiting, Tailscale validation
 │   ├── health/            # Health check endpoint
 │   └── logging/           # Structured logging
+├── test/
+│   ├── integration/       # Integration tests (build tag: integration)
+│   └── loadtest/          # WebSocket load testing tools
 ├── configs/               # Example configuration files
 ├── scripts/               # Build/install scripts
 ├── systemd/               # Service files
@@ -164,13 +167,13 @@ tailscale ip -6
 ### Background
 
 ```bash
-# Start
-./clawreachbridge start --config dev-config.yaml &
+# Start (redirect logs since dev config logs to stdout)
+./clawreachbridge start --config dev-config.yaml > bridge.log 2>&1 &
 
 # Check logs
-tail -f /var/log/clawreachbridge/clawreachbridge.log
+tail -f bridge.log
 
-# Stop
+# Stop (graceful — waits for drain_timeout)
 pkill clawreachbridge
 ```
 
@@ -211,7 +214,8 @@ go test -cover ./...
 # Generate coverage report
 go test -coverprofile=coverage.out ./...
 go tool cover -html=coverage.out -o coverage.html
-open coverage.html
+xdg-open coverage.html    # Linux
+# open coverage.html      # macOS
 
 # Run specific package
 go test ./internal/security/
@@ -326,8 +330,8 @@ for i in {1..20}; do
   wscat -c ws://$(tailscale ip -4):8080 &
 done
 
-# Check logs for rate limit messages
-tail -f clawreachbridge.log | grep "rate limit"
+# Check logs for rate limit messages (assumes foreground or stdout redirect)
+# If running via systemd: journalctl -u clawreachbridge -f | grep "rate limit"
 ```
 
 #### 6. Test Config Reload (SIGHUP)
@@ -344,7 +348,7 @@ nano dev-config.yaml
 kill -HUP $PID
 
 # Check logs for reload message
-tail clawreachbridge.log | grep "config reloaded"
+# (visible in terminal if running foreground, or in redirected log file)
 ```
 
 ### Load Testing
@@ -366,9 +370,13 @@ go run test/loadtest/ws-loadtest.go -url ws://$(tailscale ip -4):8080 -conns 100
 #### Memory Profiling
 
 ```bash
-# Start with pprof enabled (add to main.go)
-# import _ "net/http/pprof"
-# go http.ListenAndServe("localhost:6060", nil)
+# Start with pprof enabled (development only — never expose in production)
+# Guard with build tag or flag:
+#   //go:build pprof
+#   import _ "net/http/pprof"
+#   go http.ListenAndServe("localhost:6060", nil)
+#
+# Build: go build -tags pprof -o clawreachbridge ./cmd/clawreachbridge
 
 # Run for a while under load
 hey -n 100000 -c 100 http://127.0.0.1:8081/health
@@ -376,8 +384,8 @@ hey -n 100000 -c 100 http://127.0.0.1:8081/health
 # Capture heap profile
 curl http://localhost:6060/debug/pprof/heap > heap.prof
 
-# Analyze
-go tool pprof -http=:8080 heap.prof
+# Analyze (port 9090 to avoid conflict with bridge on 8080)
+go tool pprof -http=:9090 heap.prof
 ```
 
 ## Debugging
@@ -408,8 +416,16 @@ brew services start tailscale    # macOS
 #### 2. "Gateway unreachable"
 
 ```bash
-# Check if Gateway is running
-curl http://localhost:18800/health
+# Check if Gateway process is listening
+curl -s -o /dev/null -w "%{http_code}" http://localhost:18800
+# Any response (even 4xx) means it's running
+
+# Check if Gateway port is open and which interface it's bound to
+ss -tlnp | grep 18800
+# If it shows 127.0.0.1:18800 — Gateway only accepts localhost connections.
+# This is fine when bridge and gateway are on the same machine (gateway_url: http://localhost:18800).
+# If bridge is on a different machine (Scenario C), Gateway must bind to 0.0.0.0:18800
+# or the Tailscale IP so the bridge can reach it.
 
 # Check Gateway logs
 tail -f ~/.openclaw/logs/gateway.log
@@ -424,7 +440,10 @@ grep gateway_url dev-config.yaml
 # Check what's using port 8080
 sudo lsof -i :8080
 
-# Kill it
+# Graceful stop first (SIGTERM — allows drain)
+sudo kill <PID>
+
+# Only if unresponsive after a few seconds:
 sudo kill -9 <PID>
 
 # Or use a different port in config
@@ -540,16 +559,16 @@ refactor: simplify WebSocket forwarding logic
 # Format code
 go fmt ./...
 
+# Static analysis
+go vet ./...
+
 # Run linter
 golangci-lint run
-
-# Run tests
-go test ./...
 
 # Run tests with race detector
 go test -race ./...
 
-# Stage changes
+# Stage changes (dev-*.yaml and secrets are excluded by .gitignore)
 git add .
 
 # Commit
@@ -658,18 +677,19 @@ Settings (`.vscode/settings.json`):
 
 ### Reduce Allocations
 
-```go
-// Bad: allocates new buffer every time
-buf := make([]byte, 1024)
+Only use `sync.Pool` for hot paths confirmed by profiling. The core proxy
+loop already uses `io.Copy` with streaming (no full-message buffering), so
+pools are unlikely to help there. Example for other hot paths:
 
-// Good: reuse buffer pool
+```go
 var bufPool = sync.Pool{
-    New: func() interface{} {
-        return make([]byte, 1024)
+    New: func() any {
+        buf := make([]byte, 32*1024)
+        return &buf
     },
 }
-buf := bufPool.Get().([]byte)
-defer bufPool.Put(buf)
+bufp := bufPool.Get().(*[]byte)
+defer bufPool.Put(bufp)
 ```
 
 ### Avoid Copying Large Messages
@@ -685,12 +705,12 @@ _, err := io.Copy(writer, reader)
 
 ```bash
 # CPU profile
-go test -cpuprofile=cpu.prof -bench=.
-go tool pprof -http=:8080 cpu.prof
+go test -cpuprofile=cpu.prof -bench=. ./internal/proxy/
+go tool pprof -http=:9090 cpu.prof
 
 # Memory profile
-go test -memprofile=mem.prof -bench=.
-go tool pprof -http=:8080 mem.prof
+go test -memprofile=mem.prof -bench=. ./internal/proxy/
+go tool pprof -http=:9090 mem.prof
 ```
 
 ## References
