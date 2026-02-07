@@ -6,6 +6,7 @@ toolchain go1.24.13
 
 require (
 	github.com/coder/websocket v1.8.14
+	github.com/coreos/go-systemd/v22 v22.7.0
 	github.com/prometheus/client_golang v1.23.2
 	github.com/spf13/cobra v1.10.2
 	golang.org/x/time v0.14.0

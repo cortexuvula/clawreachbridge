@@ -10,7 +10,9 @@ import (
 	"os/signal"
 	"sync"
 	"syscall"
+	"time"
 
+	"github.com/coreos/go-systemd/v22/daemon"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/spf13/cobra"
 
@@ -200,81 +202,6 @@ func runBridge(configPath string, verbose bool) error {
 		}
 	}
 
-	// Signal handling
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
-
-	// SIGHUP reload handler
-	go func() {
-		for sig := range sigChan {
-			switch sig {
-			case syscall.SIGHUP:
-				slog.Info("received SIGHUP, reloading config")
-				newCfg, err := config.Load(configPath)
-				if err != nil {
-					slog.Error("config reload failed", "error", err)
-					continue
-				}
-
-				warnings := config.IsReloadSafe(cfg, newCfg)
-				for _, w := range warnings {
-					slog.Warn("config reload warning", "warning", w)
-				}
-
-				// Apply reloadable fields
-				cfg.ReloadableFields(newCfg)
-				handler.UpdateConfig(cfg)
-
-				// Update rate limiter
-				if cfg.Security.RateLimit.Enabled && rl != nil {
-					r := rate.Limit(float64(cfg.Security.RateLimit.ConnectionsPerMinute) / 60.0)
-					rl.UpdateRate(r, cfg.Security.RateLimit.ConnectionsPerMinute)
-				}
-
-				// Re-setup logging with new level
-				logging.Setup(
-					cfg.Logging.Level,
-					cfg.Logging.Format,
-					cfg.Logging.File,
-					cfg.Logging.MaxSizeMB,
-					cfg.Logging.MaxBackups,
-					cfg.Logging.MaxAgeDays,
-					cfg.Logging.Compress,
-				)
-
-				slog.Info("config reloaded successfully")
-
-			case syscall.SIGTERM, syscall.SIGINT:
-				slog.Info("received shutdown signal, draining connections",
-					"signal", sig.String(),
-					"drain_timeout", cfg.Bridge.DrainTimeout.String(),
-				)
-
-				// Stop accepting new connections
-				ctx, cancel := context.WithTimeout(context.Background(), cfg.Bridge.DrainTimeout)
-				defer cancel()
-
-				var wg sync.WaitGroup
-				if healthServer != nil {
-					wg.Add(1)
-					go func() {
-						defer wg.Done()
-						healthServer.Shutdown(ctx)
-					}()
-				}
-				wg.Add(1)
-				go func() {
-					defer wg.Done()
-					proxyServer.Shutdown(ctx)
-				}()
-				wg.Wait()
-
-				slog.Info("shutdown complete")
-				os.Exit(0)
-			}
-		}
-	}()
-
 	// Start health server
 	if healthServer != nil {
 		go func() {
@@ -286,9 +213,111 @@ func runBridge(configPath string, verbose bool) error {
 	}
 
 	// Start proxy server
-	slog.Info("proxy listening", "address", cfg.Bridge.ListenAddress)
-	if err := proxyServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		return fmt.Errorf("proxy server error: %w", err)
+	go func() {
+		slog.Info("proxy listening", "address", cfg.Bridge.ListenAddress)
+		if err := proxyServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			slog.Error("proxy server error", "error", err)
+		}
+	}()
+
+	// Notify systemd that we're ready
+	daemon.SdNotify(false, daemon.SdNotifyReady)
+
+	// Start watchdog heartbeat (send every 15s for 30s WatchdogSec)
+	watchdogCtx, watchdogCancel := context.WithCancel(context.Background())
+	defer watchdogCancel()
+	go func() {
+		ticker := time.NewTicker(15 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				sent, err := daemon.SdNotify(false, daemon.SdNotifyWatchdog)
+				if err != nil {
+					slog.Warn("failed to notify watchdog", "error", err)
+				} else if sent {
+					slog.Debug("watchdog keepalive sent")
+				}
+			case <-watchdogCtx.Done():
+				return
+			}
+		}
+	}()
+
+	// Signal handling
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
+
+	for sig := range sigChan {
+		switch sig {
+		case syscall.SIGHUP:
+			slog.Info("received SIGHUP, reloading config")
+			newCfg, err := config.Load(configPath)
+			if err != nil {
+				slog.Error("config reload failed", "error", err)
+				continue
+			}
+
+			warnings := config.IsReloadSafe(cfg, newCfg)
+			for _, w := range warnings {
+				slog.Warn("config reload warning", "warning", w)
+			}
+
+			// Apply reloadable fields
+			cfg.ReloadableFields(newCfg)
+			handler.UpdateConfig(cfg)
+
+			// Update rate limiter
+			if cfg.Security.RateLimit.Enabled && rl != nil {
+				r := rate.Limit(float64(cfg.Security.RateLimit.ConnectionsPerMinute) / 60.0)
+				rl.UpdateRate(r, cfg.Security.RateLimit.ConnectionsPerMinute)
+			}
+
+			// Re-setup logging with new level
+			logging.Setup(
+				cfg.Logging.Level,
+				cfg.Logging.Format,
+				cfg.Logging.File,
+				cfg.Logging.MaxSizeMB,
+				cfg.Logging.MaxBackups,
+				cfg.Logging.MaxAgeDays,
+				cfg.Logging.Compress,
+			)
+
+			slog.Info("config reloaded successfully")
+
+		case syscall.SIGTERM, syscall.SIGINT:
+			slog.Info("received shutdown signal, draining connections",
+				"signal", sig.String(),
+				"drain_timeout", cfg.Bridge.DrainTimeout.String(),
+			)
+
+			// Stop watchdog
+			watchdogCancel()
+			daemon.SdNotify(false, daemon.SdNotifyStopping)
+
+			// Stop accepting new connections
+			ctx, cancel := context.WithTimeout(context.Background(), cfg.Bridge.DrainTimeout)
+			defer cancel()
+
+			var wg sync.WaitGroup
+			if healthServer != nil {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					healthServer.Shutdown(ctx)
+				}()
+			}
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				proxyServer.Shutdown(ctx)
+			}()
+			wg.Wait()
+
+			slog.Info("shutdown complete")
+			return nil
+		}
 	}
 
 	return nil
