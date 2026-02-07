@@ -1,0 +1,40 @@
+# Binaries
+clawreachbridge
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
+*.out
+
+# Go workspace file
+go.work
+
+# Build artifacts
+dist/
+build/
+bin/
+
+# Config files (may contain secrets)
+config.yaml
+config.yml
+*.local.yaml
+
+# Logs
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
