@@ -18,23 +18,19 @@ ClawReach Bridge acts as a trusted proxy between ClawReach clients and OpenClaw 
 ## Quick Start
 
 ```bash
-# Install (Linux/macOS)
+# 1. Install
 curl -fsSL https://raw.githubusercontent.com/cortexuvula/clawreachbridge/master/scripts/install.sh | bash
 
-# Or download binary from releases
-wget https://github.com/cortexuvula/clawreachbridge/releases/latest/download/clawreachbridge-linux-amd64
-chmod +x clawreachbridge-linux-amd64
-sudo mv clawreachbridge-linux-amd64 /usr/local/bin/clawreachbridge
+# 2. Setup (auto-detects Tailscale IP, writes config, starts service)
+sudo clawreachbridge setup
 
-# Run interactive setup
-clawreachbridge setup
-
-# Start bridge
-sudo systemctl start clawreachbridge
-
-# Check status
+# 3. Verify
 curl http://127.0.0.1:8081/health
 ```
+
+The setup wizard will detect your Tailscale IP, prompt for Gateway URL and ports, write the config file, and optionally start the systemd service.
+
+For manual installation, download the binary from [releases](https://github.com/cortexuvula/clawreachbridge/releases) and see `configs/config.example.yaml` for configuration reference.
 
 ## Architecture
 
@@ -46,22 +42,16 @@ ClawReach Bridge (this project)
 OpenClaw Gateway (unmodified)
 ```
 
-## Status
-
-🚧 **Under Development** - See [IMPLEMENTATION_PLAN.md](./IMPLEMENTATION_PLAN.md) for detailed design.
-
 ## Documentation
 
 - [Implementation Plan](./IMPLEMENTATION_PLAN.md) - Comprehensive design document
-- [Installation Guide](./docs/INSTALLATION.md) - Coming soon
-- [Configuration Reference](./docs/CONFIGURATION.md) - Coming soon
-- [Security Considerations](./docs/SECURITY.md) - Coming soon
+- [Configuration Reference](./configs/config.example.yaml) - Example config with all options
 
 ## Requirements
 
 - **Tailscale**: Must be installed and running
 - **OpenClaw Gateway**: Must be running (typically on localhost:18800)
-- **OS**: Linux (primary), macOS (supported), Windows (future)
+- **OS**: Linux (primary), macOS (supported)
 
 ## License
 
@@ -70,13 +60,6 @@ MIT (or Apache 2.0 - TBD)
 ## Contributing
 
 See [IMPLEMENTATION_PLAN.md](./IMPLEMENTATION_PLAN.md) § 16 for guidelines.
-
-## Roadmap
-
-- [ ] **v0.1.0**: Basic WebSocket proxy + Tailscale validation
-- [ ] **v0.2.0**: Rate limiting, auth tokens, install script
-- [ ] **v1.0.0**: Production-ready with full docs
-- [ ] **v1.x**: Metrics, HA, Docker support
 
 ## Credits
 

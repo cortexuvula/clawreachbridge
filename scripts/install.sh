@@ -96,10 +96,7 @@ setup_config() {
     fi
 
     if [ ! -f "${CONFIG_DIR}/config.yaml" ]; then
-        # Generate default config
-        sudo "${INSTALL_DIR}/${BINARY_NAME}" validate --config "" 2>/dev/null || true
-        info "Create your config at ${CONFIG_DIR}/config.yaml"
-        info "See: ${INSTALL_DIR}/${BINARY_NAME} setup"
+        info "No config yet — run 'sudo ${BINARY_NAME} setup' to create one"
     else
         warn "Config already exists at ${CONFIG_DIR}/config.yaml"
     fi
@@ -151,12 +148,12 @@ main() {
 
         echo ""
         info "Installation complete!"
+        "${INSTALL_DIR}/${BINARY_NAME}" version
         echo ""
-        echo "Next steps:"
-        echo "  1. Run setup wizard:  sudo ${BINARY_NAME} setup"
-        echo "  2. Edit config:       sudo nano ${CONFIG_DIR}/config.yaml"
-        echo "  3. Start service:     sudo systemctl start clawreachbridge"
-        echo "  4. Check health:      curl http://127.0.0.1:8081/health"
+        echo "Next step:"
+        echo "  sudo ${BINARY_NAME} setup"
+        echo ""
+        echo "The setup wizard will create your config, and start the service."
     fi
 }
 

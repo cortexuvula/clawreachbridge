@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -22,6 +21,7 @@ import (
 	"github.com/cortexuvula/clawreachbridge/internal/metrics"
 	"github.com/cortexuvula/clawreachbridge/internal/proxy"
 	"github.com/cortexuvula/clawreachbridge/internal/security"
+	"github.com/cortexuvula/clawreachbridge/internal/setup"
 
 	"golang.org/x/time/rate"
 )
@@ -92,13 +92,17 @@ func main() {
 	}
 	healthCmd.Flags().String("url", "http://127.0.0.1:8081/health", "Health endpoint URL")
 
+	var setupConfigPath string
 	setupCmd := &cobra.Command{
 		Use:   "setup",
 		Short: "Interactive setup wizard",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runSetup()
+			return setup.RunWizard(os.Stdin, os.Stdout, setup.WizardOptions{
+				ConfigPath: setupConfigPath,
+			})
 		},
 	}
+	setupCmd.Flags().StringVar(&setupConfigPath, "config-path", "", "Override config file path (default: /etc/clawreachbridge/config.yaml)")
 
 	systemdCmd := &cobra.Command{
 		Use:   "systemd",
@@ -340,54 +344,6 @@ func checkHealth(url string) error {
 	return nil
 }
 
-func runSetup() error {
-	fmt.Println("Welcome to ClawReach Bridge Setup")
-	fmt.Println("==================================")
-	fmt.Println()
-
-	// Detect Tailscale
-	fmt.Println("Detecting Tailscale...")
-	addrs, err := net.InterfaceAddrs()
-	if err != nil {
-		return fmt.Errorf("failed to get network interfaces: %w", err)
-	}
-
-	var tailscaleIP string
-	for _, addr := range addrs {
-		if ipNet, ok := addr.(*net.IPNet); ok {
-			if security.IsTailscaleIP(ipNet.IP.String() + ":0") {
-				tailscaleIP = ipNet.IP.String()
-				break
-			}
-		}
-	}
-
-	if tailscaleIP == "" {
-		fmt.Println("WARNING: No Tailscale IP detected. Is Tailscale running?")
-		fmt.Println("  Run: tailscale status")
-		tailscaleIP = "100.x.x.x"
-	} else {
-		fmt.Printf("  Tailscale is running (IP: %s)\n", tailscaleIP)
-	}
-
-	fmt.Println()
-	fmt.Printf("To complete setup, create a config file at /etc/clawreachbridge/config.yaml\n")
-	fmt.Printf("with your Tailscale IP (%s) as the listen address.\n", tailscaleIP)
-	fmt.Println()
-	fmt.Println("Example:")
-	fmt.Printf("  bridge:\n")
-	fmt.Printf("    listen_address: \"%s:8080\"\n", tailscaleIP)
-	fmt.Printf("    gateway_url: \"http://localhost:18800\"\n")
-	fmt.Printf("    origin: \"https://gateway.local\"\n")
-	fmt.Println()
-	fmt.Println("Then start with:")
-	fmt.Println("  sudo systemctl start clawreachbridge")
-	fmt.Println()
-	fmt.Println("Test connection:")
-	fmt.Println("  curl http://127.0.0.1:8081/health")
-
-	return nil
-}
 
 func printSystemdUnit() {
 	fmt.Print(`[Unit]
@@ -401,6 +357,7 @@ Requires=tailscaled.service
 Type=notify
 User=clawreachbridge
 Group=clawreachbridge
+ExecStartPre=/usr/local/bin/clawreachbridge validate --config /etc/clawreachbridge/config.yaml
 ExecStart=/usr/local/bin/clawreachbridge start --config /etc/clawreachbridge/config.yaml
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure

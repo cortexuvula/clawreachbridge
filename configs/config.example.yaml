@@ -1,16 +1,21 @@
 # ClawReach Bridge Configuration
-# Copy this file to /etc/clawreachbridge/config.yaml and adjust settings.
+#
+# RECOMMENDED: Run 'sudo clawreachbridge setup' instead of editing this manually.
+# The setup wizard auto-detects your Tailscale IP and writes a valid config.
+#
+# If editing manually, copy this file to /etc/clawreachbridge/config.yaml.
 # Environment variables override file settings (CLAWREACH_ prefix).
 
 bridge:
-  # Listen address (should be Tailscale IP)
-  listen_address: "100.x.x.x:8080"
+  # REQUIRED: Listen address (must be a Tailscale IP)
+  # Replace with your Tailscale IP (run: tailscale ip -4)
+  listen_address: "REPLACE_WITH_TAILSCALE_IP:8080"
 
-  # OpenClaw Gateway upstream (http:// or https://)
+  # REQUIRED: OpenClaw Gateway upstream (http:// or https://)
   # The bridge auto-converts to ws:// or wss:// for WebSocket dialing
   gateway_url: "http://localhost:18800"
 
-  # Origin header to inject
+  # REQUIRED: Origin header to inject
   origin: "https://gateway.local"
 
   # Shutdown settings
