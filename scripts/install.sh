@@ -101,10 +101,12 @@ setup_config() {
         info "Created config directory: ${CONFIG_DIR}"
     fi
 
-    if [ ! -f "${CONFIG_DIR}/config.yaml" ]; then
-        info "No config yet — run 'sudo ${BINARY_NAME} setup' to create one"
+    CONFIG_EXISTS=false
+    if [ -f "${CONFIG_DIR}/config.yaml" ]; then
+        CONFIG_EXISTS=true
+        info "Existing config preserved at ${CONFIG_DIR}/config.yaml"
     else
-        warn "Config already exists at ${CONFIG_DIR}/config.yaml"
+        info "No config yet — will need setup"
     fi
 }
 
@@ -193,12 +195,23 @@ main() {
         info "Installation complete!"
         "${INSTALL_DIR}/${BINARY_NAME}" version
 
-        if [ "${WAS_RUNNING}" != "true" ]; then
+        if [ "${WAS_RUNNING}" = "true" ]; then
+            # Upgrade — service was restarted above
+            echo ""
+            echo "Upgrade complete!"
+        elif [ "${CONFIG_EXISTS}" = "true" ]; then
+            # Config exists but service wasn't running
+            echo ""
+            echo "Config found at ${CONFIG_DIR}/config.yaml"
+            echo "Start the service:"
+            echo "  sudo systemctl start clawreachbridge"
+        else
+            # Fresh install
             echo ""
             echo "Next step:"
             echo "  sudo ${BINARY_NAME} setup"
             echo ""
-            echo "The setup wizard will create your config, and start the service."
+            echo "The setup wizard will create your config and start the service."
         fi
     fi
 }

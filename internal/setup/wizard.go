@@ -71,7 +71,18 @@ func RunWizard(in io.Reader, out io.Writer, opts WizardOptions) error {
 		fmt.Fprintf(out, "  Found Tailscale IP: %s\n\n", tailscaleIP)
 	}
 
-	// Step 2: Gateway URL
+	// Step 2: Check for existing config (before prompting for values)
+	if _, err := os.Stat(configPath); err == nil {
+		overwrite := prompt(scanner, out,
+			fmt.Sprintf("Config already exists at %s. Overwrite? [y/N]: ", configPath), "n")
+		if !strings.HasPrefix(strings.ToLower(overwrite), "y") {
+			fmt.Fprintln(out, "Existing config preserved. No changes made.")
+			return nil
+		}
+		fmt.Fprintln(out)
+	}
+
+	// Step 3: Gateway URL
 	gatewayURL := prompt(scanner, out,
 		fmt.Sprintf("Gateway URL [%s]: ", defaultGatewayURL),
 		defaultGatewayURL)
@@ -88,7 +99,7 @@ func RunWizard(in io.Reader, out io.Writer, opts WizardOptions) error {
 	}
 	gwCheck(out, gatewayURL)
 
-	// Step 3: Listen port
+	// Step 4: Listen port
 	defaultAddr := defaultListenPort
 	listenPort := promptPort(scanner, out,
 		fmt.Sprintf("Listen port [%s]: ", defaultAddr),
@@ -110,7 +121,7 @@ func RunWizard(in io.Reader, out io.Writer, opts WizardOptions) error {
 		fmt.Fprintf(out, "  WARNING: Port %s on %s %s\n\n", listenPort, listenHost, reason)
 	}
 
-	// Step 4: Health port
+	// Step 5: Health port
 	healthPort := promptPort(scanner, out,
 		fmt.Sprintf("Health check port [%s]: ", defaultHealthPort),
 		defaultHealthPort)
@@ -121,19 +132,9 @@ func RunWizard(in io.Reader, out io.Writer, opts WizardOptions) error {
 		fmt.Fprintf(out, "  WARNING: Port %s on 127.0.0.1 %s\n\n", healthPort, reason)
 	}
 
-	// Step 5: Auth token (optional)
+	// Step 6: Auth token (optional)
 	authToken := prompt(scanner, out,
 		"Auth token (leave empty for none): ", "")
-
-	// Step 6: Check for existing config
-	if _, err := os.Stat(configPath); err == nil {
-		overwrite := prompt(scanner, out,
-			fmt.Sprintf("Config already exists at %s. Overwrite? [y/N]: ", configPath), "n")
-		if !strings.HasPrefix(strings.ToLower(overwrite), "y") {
-			fmt.Fprintln(out, "Setup cancelled.")
-			return nil
-		}
-	}
 
 	// Step 7: Write config
 	fmt.Fprintf(out, "\nWriting config to %s...\n", configPath)

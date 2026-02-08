@@ -214,14 +214,8 @@ func TestRunWizard_ExistingConfig_NoOverwrite(t *testing.T) {
 	// Create existing config
 	os.WriteFile(configPath, []byte("existing"), 0640)
 
-	// With Tailscale: gateway URL, listen port, health port, auth token, overwrite?
-	input := strings.Join([]string{
-		"", // gateway URL
-		"", // listen port
-		"", // health port
-		"", // auth token
-		"n", // don't overwrite
-	}, "\n") + "\n"
+	// Overwrite prompt comes right after Tailscale detection now
+	input := "n\n" // don't overwrite — wizard exits immediately
 
 	var out bytes.Buffer
 	err := RunWizard(strings.NewReader(input), &out, testOpts(configPath, "100.64.1.1"))
@@ -233,8 +227,8 @@ func TestRunWizard_ExistingConfig_NoOverwrite(t *testing.T) {
 	if string(data) != "existing" {
 		t.Error("config should not be overwritten when user says no")
 	}
-	if !strings.Contains(out.String(), "Setup cancelled") {
-		t.Error("should print cancellation message")
+	if !strings.Contains(out.String(), "Existing config preserved") {
+		t.Error("should print preservation message")
 	}
 }
 
@@ -244,12 +238,13 @@ func TestRunWizard_ExistingConfig_Overwrite(t *testing.T) {
 
 	os.WriteFile(configPath, []byte("old"), 0640)
 
+	// Overwrite prompt comes first now, then the remaining value prompts
 	input := strings.Join([]string{
-		"", // gateway URL
-		"", // listen port
-		"", // health port
-		"", // auth token
 		"y", // overwrite
+		"",  // gateway URL
+		"",  // listen port
+		"",  // health port
+		"",  // auth token
 	}, "\n") + "\n"
 
 	var out bytes.Buffer
