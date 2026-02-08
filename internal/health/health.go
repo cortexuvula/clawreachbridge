@@ -101,6 +101,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // checkGateway verifies the upstream Gateway is reachable.
 // Uses a plain HTTP request (not WebSocket dial) to avoid creating real
 // connections and polluting Gateway logs on every health poll.
+// noRedirectClient refuses to follow HTTP redirects to prevent SSRF amplification.
+var noRedirectClient = &http.Client{
+	CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		return http.ErrUseLastResponse
+	},
+}
+
 func (h *Handler) checkGateway() bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -111,11 +118,11 @@ func (h *Handler) checkGateway() bool {
 		return false
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := noRedirectClient.Do(req)
 	if err != nil {
 		slog.Debug("gateway unreachable", "url", h.gatewayURL, "error", err)
 		return false
 	}
 	resp.Body.Close()
-	return true // any response (even 4xx) means Gateway is alive
+	return true // any response (even 4xx/3xx) means Gateway is alive
 }

@@ -35,6 +35,30 @@ func (p *Proxy) ConnectionCountForIP(ip string) int {
 	return p.ipConnections[ip]
 }
 
+// TryIncrementConnections atomically checks limits and increments counters.
+// Returns "" on success, or a reason string if the limit was hit.
+func (p *Proxy) TryIncrementConnections(ip string, maxGlobal, maxPerIP int) string {
+	p.ipMu.Lock()
+	defer p.ipMu.Unlock()
+
+	// Check global limit (read atomic under the lock to prevent TOCTOU)
+	current := int(p.activeConnections.Load())
+	if current >= maxGlobal {
+		return "max_connections"
+	}
+
+	// Check per-IP limit
+	if p.ipConnections[ip] >= maxPerIP {
+		return "max_connections_per_ip"
+	}
+
+	// Both checks passed — increment atomically
+	p.activeConnections.Add(1)
+	p.totalConnections.Add(1)
+	p.ipConnections[ip]++
+	return ""
+}
+
 // IncrementConnections increments both global and per-IP connection counters.
 func (p *Proxy) IncrementConnections(ip string) {
 	p.activeConnections.Add(1)

@@ -181,8 +181,9 @@ func runBridge(configPath string, verbose bool) error {
 
 	// Proxy server (listens on Tailscale IP)
 	proxyServer := &http.Server{
-		Addr:    cfg.Bridge.ListenAddress,
-		Handler: handler,
+		Addr:              cfg.Bridge.ListenAddress,
+		Handler:           handler,
+		ReadHeaderTimeout: 10 * time.Second,
 	}
 
 	// Health server (listens on 127.0.0.1:8081)
@@ -201,8 +202,11 @@ func runBridge(configPath string, verbose bool) error {
 		}
 
 		healthServer = &http.Server{
-			Addr:    cfg.Health.ListenAddress,
-			Handler: healthMux,
+			Addr:              cfg.Health.ListenAddress,
+			Handler:           healthMux,
+			ReadHeaderTimeout: 10 * time.Second,
+			ReadTimeout:       30 * time.Second,
+			WriteTimeout:      30 * time.Second,
 		}
 	}
 
@@ -267,8 +271,10 @@ func runBridge(configPath string, verbose bool) error {
 				slog.Warn("config reload warning", "warning", w)
 			}
 
-			// Apply reloadable fields
-			cfg.ReloadableFields(newCfg)
+			// Apply reloadable fields to a copy to avoid racing with active goroutines
+			updated := *cfg
+			updated.ReloadableFields(newCfg)
+			cfg = &updated
 			handler.UpdateConfig(cfg)
 
 			// Update rate limiter

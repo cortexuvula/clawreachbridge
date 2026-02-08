@@ -14,6 +14,7 @@ import (
 	"github.com/cortexuvula/clawreachbridge/internal/config"
 	"github.com/cortexuvula/clawreachbridge/internal/metrics"
 	"github.com/cortexuvula/clawreachbridge/internal/security"
+	"golang.org/x/time/rate"
 )
 
 // Handler is the HTTP handler that accepts WebSocket connections from
@@ -88,21 +89,17 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 4. Connection limits
-	if h.Proxy.ConnectionCount() >= cfg.Security.MaxConnections {
-		slog.Warn("max connections reached", "current", h.Proxy.ConnectionCount(), "max", cfg.Security.MaxConnections)
-		http.Error(w, "Service Unavailable", http.StatusServiceUnavailable)
+	// 4. Connection limits (atomic check-and-increment to prevent TOCTOU race)
+	if reason := h.Proxy.TryIncrementConnections(clientIP, cfg.Security.MaxConnections, cfg.Security.MaxConnectionsPerIP); reason != "" {
+		if reason == "max_connections" {
+			slog.Warn("max connections reached", "current", h.Proxy.ConnectionCount(), "max", cfg.Security.MaxConnections)
+			http.Error(w, "Service Unavailable", http.StatusServiceUnavailable)
+		} else {
+			slog.Warn("max connections per IP reached", "client_ip", clientIP, "current", h.Proxy.ConnectionCountForIP(clientIP))
+			http.Error(w, "Too Many Requests", http.StatusTooManyRequests)
+		}
 		return
 	}
-	if h.Proxy.ConnectionCountForIP(clientIP) >= cfg.Security.MaxConnectionsPerIP {
-		slog.Warn("max connections per IP reached", "client_ip", clientIP, "current", h.Proxy.ConnectionCountForIP(clientIP))
-		http.Error(w, "Too Many Requests", http.StatusTooManyRequests)
-		return
-	}
-
-	// Reserve the connection slot immediately so concurrent requests
-	// see an accurate count before Accept/Dial complete.
-	h.Proxy.IncrementConnections(clientIP)
 	if h.Metrics != nil {
 		h.Metrics.ConnectionsTotal.Inc()
 		h.Metrics.ActiveConnections.Inc()
@@ -153,23 +150,36 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// context.CancelFunc is safe to call multiple times.
 	proxyCtx, proxyCancel := context.WithCancel(context.Background())
 
+	// Start keepalive pings to detect dead connections.
+	// Ping must run concurrently with Reader per coder/websocket docs.
+	if cfg.Bridge.PingInterval > 0 {
+		go h.keepAlive(proxyCtx, clientConn, cfg.Bridge.PingInterval, cfg.Bridge.PongTimeout, proxyCancel)
+		go h.keepAlive(proxyCtx, gatewayConn, cfg.Bridge.PingInterval, cfg.Bridge.PongTimeout, proxyCancel)
+	}
+
 	// Guard CloseNow with sync.Once — context cancellation can trigger
 	// internal closes in coder/websocket concurrently with our cleanup.
 	var closeClientOnce, closeGatewayOnce sync.Once
 	closeClient := func() { closeClientOnce.Do(func() { clientConn.CloseNow() }) }
 	closeGateway := func() { closeGatewayOnce.Do(func() { gatewayConn.CloseNow() }) }
 
+	// Per-connection message rate limiter (client→gateway only)
+	var msgLimiter *rate.Limiter
+	if cfg.Security.RateLimit.Enabled && cfg.Security.RateLimit.MessagesPerSecond > 0 {
+		msgLimiter = rate.NewLimiter(rate.Limit(cfg.Security.RateLimit.MessagesPerSecond), cfg.Security.RateLimit.MessagesPerSecond)
+	}
+
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
 		defer proxyCancel()
-		h.forwardMessages(proxyCtx, clientConn, gatewayConn, "client→gateway")
+		h.forwardMessages(proxyCtx, clientConn, gatewayConn, "client→gateway", msgLimiter)
 	}()
 	go func() {
 		defer wg.Done()
 		defer proxyCancel()
-		h.forwardMessages(proxyCtx, gatewayConn, clientConn, "gateway→client")
+		h.forwardMessages(proxyCtx, gatewayConn, clientConn, "gateway→client", nil)
 	}()
 
 	// Cleanup: wait for both to finish, then close connections
@@ -189,13 +199,21 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // forwardMessages reads from src and writes to dst until the context is
 // cancelled or either side closes. This is the core proxy loop.
 // direction is "client→gateway" or "gateway→client" for logging.
-func (h *Handler) forwardMessages(ctx context.Context, src, dst *websocket.Conn, direction string) {
+// msgLimiter is optional; if non-nil, messages are rate-limited.
+func (h *Handler) forwardMessages(ctx context.Context, src, dst *websocket.Conn, direction string, msgLimiter *rate.Limiter) {
 	cfg := h.GetConfig()
 	for {
 		msgType, reader, err := src.Reader(ctx)
 		if err != nil {
 			slog.Debug("forward stopped", "direction", direction, "reason", err)
 			return
+		}
+
+		if msgLimiter != nil {
+			if err := msgLimiter.Wait(ctx); err != nil {
+				slog.Debug("message rate limit", "direction", direction, "reason", err)
+				return
+			}
 		}
 
 		writeCtx, writeCancel := context.WithTimeout(ctx, cfg.Bridge.WriteTimeout)
@@ -224,6 +242,28 @@ func (h *Handler) forwardMessages(ctx context.Context, src, dst *websocket.Conn,
 				h.Metrics.MessagesTotal.WithLabelValues("upstream").Inc()
 			} else {
 				h.Metrics.MessagesTotal.WithLabelValues("downstream").Inc()
+			}
+		}
+	}
+}
+
+// keepAlive sends periodic WebSocket pings to detect dead connections.
+// If a ping fails or times out, it cancels the proxy context to tear down both sides.
+func (h *Handler) keepAlive(ctx context.Context, conn *websocket.Conn, interval, pongTimeout time.Duration, cancel context.CancelFunc) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			pingCtx, pingCancel := context.WithTimeout(ctx, pongTimeout)
+			err := conn.Ping(pingCtx)
+			pingCancel()
+			if err != nil {
+				slog.Debug("keepalive ping failed, closing connection", "error", err)
+				cancel()
+				return
 			}
 		}
 	}

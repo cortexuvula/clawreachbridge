@@ -155,6 +155,11 @@ func TestValidation(t *testing.T) {
 			wantErr: "bridge.gateway_url is required",
 		},
 		{
+			name:    "invalid gateway_url scheme",
+			modify:  func(c *Config) { c.Bridge.GatewayURL = "ftp://localhost:18800" },
+			wantErr: "bridge.gateway_url must use http:// or https://",
+		},
+		{
 			name:    "empty origin",
 			modify:  func(c *Config) { c.Bridge.Origin = "" },
 			wantErr: "bridge.origin is required",

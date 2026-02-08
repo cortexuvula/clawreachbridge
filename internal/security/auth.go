@@ -1,7 +1,8 @@
 package security
 
 import (
-	"crypto/subtle"
+	"crypto/hmac"
+	"crypto/sha256"
 	"strings"
 )
 
@@ -14,12 +15,19 @@ func ExtractBearerToken(authHeader string) string {
 	return ""
 }
 
-// TokenMatch uses constant-time comparison to prevent timing attacks.
+// TokenMatch uses HMAC comparison to prevent timing attacks including length oracle.
 func TokenMatch(provided, expected string) bool {
 	if provided == "" || expected == "" {
 		return false
 	}
-	return subtle.ConstantTimeCompare([]byte(provided), []byte(expected)) == 1
+	// HMAC with a fixed key normalizes both values to the same length,
+	// preventing the length leak in subtle.ConstantTimeCompare.
+	key := []byte("clawreach-token-compare")
+	h1 := hmac.New(sha256.New, key)
+	h1.Write([]byte(provided))
+	h2 := hmac.New(sha256.New, key)
+	h2.Write([]byte(expected))
+	return hmac.Equal(h1.Sum(nil), h2.Sum(nil))
 }
 
 // ExtractClientIP strips the port from RemoteAddr ("ip:port" → "ip").

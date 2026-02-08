@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"reflect"
 	"strings"
@@ -165,6 +166,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Bridge.GatewayURL == "" {
 		return fmt.Errorf("bridge.gateway_url is required")
+	}
+	if u, err := url.Parse(c.Bridge.GatewayURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+		return fmt.Errorf("bridge.gateway_url must use http:// or https:// scheme")
 	}
 	if c.Bridge.Origin == "" {
 		return fmt.Errorf("bridge.origin is required")

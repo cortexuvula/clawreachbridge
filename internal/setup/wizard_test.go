@@ -429,6 +429,8 @@ func TestRunWizard_GatewayURLValidation(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.yaml")
 
+	// Use a URL without http/https scheme — wizard warns and writes it,
+	// but config.Load() rejects non-http/https schemes.
 	input := strings.Join([]string{
 		"not-a-url", // invalid gateway URL
 		"",          // listen port
@@ -438,13 +440,18 @@ func TestRunWizard_GatewayURLValidation(t *testing.T) {
 
 	var out bytes.Buffer
 	err := RunWizard(strings.NewReader(input), &out, testOpts(configPath, "100.64.1.1"))
-	if err != nil {
-		t.Fatalf("RunWizard() error: %v", err)
+
+	// Config validation now rejects invalid gateway_url schemes
+	if err == nil {
+		t.Fatal("RunWizard() should fail config validation for invalid gateway URL scheme")
+	}
+	if !strings.Contains(err.Error(), "gateway_url") {
+		t.Errorf("error should mention gateway_url, got: %v", err)
 	}
 
 	output := out.String()
 	if !strings.Contains(output, "WARNING") || !strings.Contains(output, "not-a-url") {
-		t.Error("wizard should warn about invalid gateway URL format")
+		t.Error("wizard should warn about invalid gateway URL format before validation fails")
 	}
 }
 

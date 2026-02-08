@@ -85,3 +85,39 @@ func TestHttpToWS(t *testing.T) {
 		})
 	}
 }
+
+func TestTryIncrementConnections(t *testing.T) {
+	p := New()
+
+	// Should succeed within limits
+	if reason := p.TryIncrementConnections("10.0.0.1", 3, 2); reason != "" {
+		t.Errorf("TryIncrementConnections() = %q, want empty", reason)
+	}
+	if got := p.ConnectionCount(); got != 1 {
+		t.Errorf("ConnectionCount() = %d, want 1", got)
+	}
+
+	// Second from same IP — still within per-IP limit of 2
+	if reason := p.TryIncrementConnections("10.0.0.1", 3, 2); reason != "" {
+		t.Errorf("TryIncrementConnections() = %q, want empty", reason)
+	}
+
+	// Third from same IP — should hit per-IP limit
+	if reason := p.TryIncrementConnections("10.0.0.1", 3, 2); reason != "max_connections_per_ip" {
+		t.Errorf("TryIncrementConnections() = %q, want %q", reason, "max_connections_per_ip")
+	}
+	// Count should NOT have incremented
+	if got := p.ConnectionCount(); got != 2 {
+		t.Errorf("ConnectionCount() = %d, want 2 (should not increment on rejection)", got)
+	}
+
+	// Different IP — should succeed (global count is 2, limit is 3)
+	if reason := p.TryIncrementConnections("10.0.0.2", 3, 2); reason != "" {
+		t.Errorf("TryIncrementConnections() = %q, want empty", reason)
+	}
+
+	// Now at global limit of 3 — another should hit global limit
+	if reason := p.TryIncrementConnections("10.0.0.3", 3, 2); reason != "max_connections" {
+		t.Errorf("TryIncrementConnections() = %q, want %q", reason, "max_connections")
+	}
+}
