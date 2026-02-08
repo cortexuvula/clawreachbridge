@@ -1,6 +1,7 @@
 package security
 
 import (
+	"fmt"
 	"testing"
 
 	"golang.org/x/time/rate"
@@ -61,6 +62,34 @@ func TestRateLimiterUpdateRate(t *testing.T) {
 	// Should have new burst available
 	if !rl.Allow(ip) {
 		t.Error("should be allowed after rate update")
+	}
+}
+
+func TestRateLimiterMaxEntries(t *testing.T) {
+	rl := NewRateLimiter(rate.Limit(1), 10)
+	defer rl.Stop()
+
+	// Override maxEntries to a small value for testing
+	rl.mu.Lock()
+	rl.maxEntries = 3
+	rl.mu.Unlock()
+
+	// First 3 IPs should be allowed
+	for i := 0; i < 3; i++ {
+		ip := fmt.Sprintf("100.64.0.%d", i+1)
+		if !rl.Allow(ip) {
+			t.Errorf("IP %s should be allowed (map not full)", ip)
+		}
+	}
+
+	// 4th IP should be rejected (map cap reached)
+	if rl.Allow("100.64.0.100") {
+		t.Error("should reject new IP when map is at capacity")
+	}
+
+	// Existing IP should still be allowed
+	if !rl.Allow("100.64.0.1") {
+		t.Error("existing IP should still be allowed")
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -183,15 +184,19 @@ func runBridge(configPath string, verbose bool) error {
 		slog.Info("prometheus metrics enabled", "endpoint", cfg.Monitoring.MetricsEndpoint)
 	}
 
-	// Proxy server (listens on Tailscale IP)
+	// Bind proxy listener synchronously (detect port conflicts before sd_notify)
+	proxyListener, err := net.Listen("tcp", cfg.Bridge.ListenAddress)
+	if err != nil {
+		return fmt.Errorf("failed to bind proxy listener on %s: %w", cfg.Bridge.ListenAddress, err)
+	}
 	proxyServer := &http.Server{
-		Addr:              cfg.Bridge.ListenAddress,
 		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
 	// Health server (listens on 127.0.0.1:8081)
 	var healthServer *http.Server
+	var healthListener net.Listener
 	if cfg.Health.Enabled {
 		healthHandler := health.NewHandler(p, cfg.Bridge.GatewayURL, Version, cfg.Health.Detailed)
 		if m != nil {
@@ -205,8 +210,13 @@ func runBridge(configPath string, verbose bool) error {
 			healthMux.Handle(cfg.Monitoring.MetricsEndpoint, promhttp.Handler())
 		}
 
+		healthListener, err = net.Listen("tcp", cfg.Health.ListenAddress)
+		if err != nil {
+			proxyListener.Close()
+			return fmt.Errorf("failed to bind health listener on %s: %w", cfg.Health.ListenAddress, err)
+		}
+
 		healthServer = &http.Server{
-			Addr:              cfg.Health.ListenAddress,
 			Handler:           healthMux,
 			ReadHeaderTimeout: 10 * time.Second,
 			ReadTimeout:       30 * time.Second,
@@ -214,25 +224,25 @@ func runBridge(configPath string, verbose bool) error {
 		}
 	}
 
-	// Start health server
+	// Start health server (non-blocking)
 	if healthServer != nil {
 		go func() {
 			slog.Info("health endpoint listening", "address", cfg.Health.ListenAddress)
-			if err := healthServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			if err := healthServer.Serve(healthListener); err != nil && err != http.ErrServerClosed {
 				slog.Error("health server error", "error", err)
 			}
 		}()
 	}
 
-	// Start proxy server
+	// Start proxy server (non-blocking)
 	go func() {
 		slog.Info("proxy listening", "address", cfg.Bridge.ListenAddress)
-		if err := proxyServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := proxyServer.Serve(proxyListener); err != nil && err != http.ErrServerClosed {
 			slog.Error("proxy server error", "error", err)
 		}
 	}()
 
-	// Notify systemd that we're ready
+	// Notify systemd that we're ready (both listeners are bound)
 	daemon.SdNotify(false, daemon.SdNotifyReady)
 
 	// Start watchdog heartbeat (send every 15s for 30s WatchdogSec)
@@ -275,10 +285,7 @@ func runBridge(configPath string, verbose bool) error {
 				slog.Warn("config reload warning", "warning", w)
 			}
 
-			// Apply reloadable fields to a copy to avoid racing with active goroutines
-			updated := *cfg
-			updated.ReloadableFields(newCfg)
-			cfg = &updated
+			cfg = cfg.ApplyReloadableFields(newCfg)
 			handler.UpdateConfig(cfg)
 
 			// Update rate limiter

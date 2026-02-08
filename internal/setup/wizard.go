@@ -311,6 +311,10 @@ func startSystemdService(out io.Writer) error {
 func yamlEscapeString(s string) string {
 	s = strings.ReplaceAll(s, `\`, `\\`)
 	s = strings.ReplaceAll(s, `"`, `\"`)
+	s = strings.ReplaceAll(s, "\n", `\n`)
+	s = strings.ReplaceAll(s, "\r", `\r`)
+	s = strings.ReplaceAll(s, "\t", `\t`)
+	s = strings.ReplaceAll(s, "\x00", "")
 	return s
 }
 
@@ -350,8 +354,9 @@ security:
   # Only allow connections from Tailscale IPs
   tailscale_only: true
 
-  # Auth token (optional)
+  # Auth token (optional, stored in plaintext — protect this file with strict permissions)
   # Clients send via Authorization: Bearer <token> header or ?token=xxx query param
+  # File permissions should be 0640, owned by the service account
 %s
 
   # Rate limiting

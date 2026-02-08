@@ -22,6 +22,9 @@ jobs:
       - name: Test
         run: go test -race -coverprofile=coverage.out ./...
 
+      - name: Integration Test
+        run: go test -race -tags=integration ./test/integration/
+
       - name: Upload coverage
         uses: actions/upload-artifact@v4
         with:

@@ -74,13 +74,17 @@ download_binary() {
         wget -q -O "${tmp_dir}/checksums.txt" "${checksum_url}" 2>/dev/null || warn "Checksum file not available — skipping verification"
     fi
 
-    # Verify checksum if available
+    # Verify checksum (mandatory unless --skip-checksum)
     if [ -f "${tmp_dir}/checksums.txt" ] && command -v sha256sum &>/dev/null; then
         info "Verifying checksum..."
         (cd "${tmp_dir}" && grep -F "${BINARY}" checksums.txt | sha256sum -c --quiet) || die "Checksum verification failed"
         info "Checksum verified"
     else
-        warn "Checksum verification skipped (checksums.txt not found or sha256sum not available)"
+        if [ "${SKIP_CHECKSUM:-}" = "true" ]; then
+            warn "Checksum verification skipped (--skip-checksum)"
+        else
+            die "Checksum verification not possible (checksums.txt not found or sha256sum not available). Use --skip-checksum to bypass."
+        fi
     fi
 
     # Install binary
@@ -130,6 +134,14 @@ install_systemd() {
 
 # Main
 main() {
+    # Parse flags
+    SKIP_CHECKSUM=false
+    for arg in "$@"; do
+        case "${arg}" in
+            --skip-checksum) SKIP_CHECKSUM=true ;;
+        esac
+    done
+
     echo ""
     echo "ClawReach Bridge Installer"
     echo "========================="

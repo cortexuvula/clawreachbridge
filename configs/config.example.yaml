@@ -38,9 +38,10 @@ security:
   # Only allow Tailscale IPs (IPv4: 100.64.0.0/10, IPv6: fd7a:115c:a1e0::/48)
   tailscale_only: true
 
-  # Optional auth token
-  # Clients should provide via Authorization: Bearer <token> header (preferred)
+  # Auth token (optional, stored in plaintext — protect this file with strict permissions)
+  # Clients send via Authorization: Bearer <token> header (preferred)
   # or ?token=xxx query parameter (fallback for development/testing)
+  # File permissions should be 0640, owned by the service account
   auth_token: ""
 
   # Rate limiting

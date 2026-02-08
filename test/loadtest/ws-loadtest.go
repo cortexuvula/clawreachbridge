@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"sync"
@@ -50,9 +51,13 @@ func main() {
 		connectFails atomic.Int64
 	)
 
-	targetURL := *url
+	var dialOpts *websocket.DialOptions
 	if *token != "" {
-		targetURL += "?token=" + *token
+		dialOpts = &websocket.DialOptions{
+			HTTPHeader: http.Header{
+				"Authorization": {"Bearer " + *token},
+			},
+		}
 	}
 
 	var wg sync.WaitGroup
@@ -63,7 +68,7 @@ func main() {
 		go func(id int) {
 			defer wg.Done()
 
-			c, _, err := websocket.Dial(ctx, targetURL, nil)
+			c, _, err := websocket.Dial(ctx, *url, dialOpts)
 			if err != nil {
 				connectFails.Add(1)
 				return

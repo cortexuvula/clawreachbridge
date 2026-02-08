@@ -40,14 +40,6 @@ func Setup(level, format, file string, maxSizeMB, maxBackups, maxAgeDays int, co
 	return lj
 }
 
-// SetLevel updates the global log level dynamically (for SIGHUP reload).
-func SetLevel(level string) {
-	// Re-setup is needed since slog.HandlerOptions.Level is set at construction.
-	// We rely on the caller to call Setup again with the new level.
-	// This function exists as a convenience alias.
-	_ = parseLevel(level) // validate only
-}
-
 func parseLevel(level string) slog.Level {
 	switch level {
 	case "debug":

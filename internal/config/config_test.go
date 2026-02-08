@@ -262,6 +262,43 @@ func TestValidation(t *testing.T) {
 			},
 			wantErr: "bridge.listen_address should not bind to all interfaces",
 		},
+		{
+			name: "gateway_url public IP",
+			modify: func(c *Config) {
+				c.Bridge.GatewayURL = "http://8.8.8.8:18800"
+			},
+			wantErr: "bridge.gateway_url should point to localhost or a private IP",
+		},
+		{
+			name:   "gateway_url localhost hostname is valid",
+			modify: func(c *Config) { c.Bridge.GatewayURL = "http://localhost:18800" },
+		},
+		{
+			name:   "gateway_url private IP is valid",
+			modify: func(c *Config) { c.Bridge.GatewayURL = "http://192.168.1.1:18800" },
+		},
+		{
+			name: "health listen_address not loopback",
+			modify: func(c *Config) {
+				c.Health.Enabled = true
+				c.Health.ListenAddress = "0.0.0.0:8081"
+			},
+			wantErr: "health.listen_address should bind to a loopback address",
+		},
+		{
+			name:   "health listen_address loopback is valid",
+			modify: func(c *Config) { c.Health.ListenAddress = "127.0.0.1:8081" },
+		},
+		{
+			name: "health and proxy same address",
+			modify: func(c *Config) {
+				c.Health.Enabled = true
+				c.Bridge.ListenAddress = "127.0.0.1:8080"
+				c.Health.ListenAddress = "127.0.0.1:8080"
+				c.Security.TailscaleOnly = false
+			},
+			wantErr: "bridge.listen_address and health.listen_address must be different",
+		},
 	}
 
 	for _, tt := range tests {
@@ -309,22 +346,28 @@ func TestIsReloadSafe(t *testing.T) {
 	}
 }
 
-func TestReloadableFields(t *testing.T) {
+func TestApplyReloadableFields(t *testing.T) {
 	old := DefaultConfig()
-	new := DefaultConfig()
-	new.Security.AuthToken = "new-token"
-	new.Logging.Level = "debug"
-	new.Bridge.MaxMessageSize = 2097152
+	newCfg := DefaultConfig()
+	newCfg.Security.AuthToken = "new-token"
+	newCfg.Logging.Level = "debug"
+	newCfg.Bridge.MaxMessageSize = 2097152
 
-	old.ReloadableFields(new)
+	updated := old.ApplyReloadableFields(newCfg)
 
-	if old.Security.AuthToken != "new-token" {
+	// Original should be unchanged
+	if old.Security.AuthToken != "" {
+		t.Errorf("original auth_token should be unchanged, got %q", old.Security.AuthToken)
+	}
+
+	// Updated should have new values
+	if updated.Security.AuthToken != "new-token" {
 		t.Errorf("auth_token not reloaded")
 	}
-	if old.Logging.Level != "debug" {
+	if updated.Logging.Level != "debug" {
 		t.Errorf("log level not reloaded")
 	}
-	if old.Bridge.MaxMessageSize != 2097152 {
+	if updated.Bridge.MaxMessageSize != 2097152 {
 		t.Errorf("max_message_size not reloaded")
 	}
 }

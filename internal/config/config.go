@@ -174,6 +174,12 @@ func (c *Config) Validate() error {
 	}
 	if u, err := url.Parse(c.Bridge.GatewayURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") {
 		return fmt.Errorf("bridge.gateway_url must use http:// or https:// scheme")
+	} else if u != nil {
+		host := u.Hostname()
+		ip := net.ParseIP(host)
+		if ip != nil && !ip.IsLoopback() && !ip.IsPrivate() {
+			return fmt.Errorf("bridge.gateway_url should point to localhost or a private IP, got %s", host)
+		}
 	}
 	if c.Bridge.Origin == "" {
 		return fmt.Errorf("bridge.origin is required")
@@ -270,6 +276,14 @@ func (c *Config) Validate() error {
 		if _, _, err := net.SplitHostPort(c.Health.ListenAddress); err != nil {
 			return fmt.Errorf("health.listen_address is invalid: %w", err)
 		}
+		host, _, _ := net.SplitHostPort(c.Health.ListenAddress)
+		ip := net.ParseIP(host)
+		if ip != nil && !ip.IsLoopback() {
+			return fmt.Errorf("health.listen_address should bind to a loopback address (e.g. 127.0.0.1) to avoid exposing metrics")
+		}
+		if c.Bridge.ListenAddress == c.Health.ListenAddress {
+			return fmt.Errorf("bridge.listen_address and health.listen_address must be different")
+		}
 	}
 
 	return nil
@@ -311,15 +325,17 @@ func applyEnvOverrides(cfg *Config) {
 	}
 }
 
-// ReloadableFields returns the fields that can be hot-reloaded via SIGHUP.
+// ApplyReloadableFields returns a copy of c with reloadable fields from newCfg.
 // Non-reloadable: listen_address, gateway_url, tls, health.listen_address
-func (c *Config) ReloadableFields(newCfg *Config) {
-	c.Security.RateLimit = newCfg.Security.RateLimit
-	c.Security.AuthToken = newCfg.Security.AuthToken
-	c.Security.MaxConnections = newCfg.Security.MaxConnections
-	c.Security.MaxConnectionsPerIP = newCfg.Security.MaxConnectionsPerIP
-	c.Logging.Level = newCfg.Logging.Level
-	c.Bridge.MaxMessageSize = newCfg.Bridge.MaxMessageSize
+func (c *Config) ApplyReloadableFields(newCfg *Config) *Config {
+	updated := *c
+	updated.Security.RateLimit = newCfg.Security.RateLimit
+	updated.Security.AuthToken = newCfg.Security.AuthToken
+	updated.Security.MaxConnections = newCfg.Security.MaxConnections
+	updated.Security.MaxConnectionsPerIP = newCfg.Security.MaxConnectionsPerIP
+	updated.Logging.Level = newCfg.Logging.Level
+	updated.Bridge.MaxMessageSize = newCfg.Bridge.MaxMessageSize
+	return &updated
 }
 
 // IsReloadSafe checks if only reloadable fields changed between configs.

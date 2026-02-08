@@ -21,7 +21,7 @@ func init() {
 func ExtractBearerToken(authHeader string) string {
 	const prefix = "bearer "
 	if len(authHeader) > len(prefix) && strings.EqualFold(authHeader[:len(prefix)], prefix) {
-		return authHeader[len(prefix):]
+		return strings.TrimSpace(authHeader[len(prefix):])
 	}
 	return ""
 }
@@ -40,15 +40,3 @@ func TokenMatch(provided, expected string) bool {
 	return hmac.Equal(h1.Sum(nil), h2.Sum(nil))
 }
 
-// ExtractClientIP strips the port from RemoteAddr ("ip:port" → "ip").
-func ExtractClientIP(remoteAddr string) string {
-	// Handle IPv6 addresses like "[::1]:8080"
-	if idx := strings.LastIndex(remoteAddr, ":"); idx != -1 {
-		host := remoteAddr[:idx]
-		// Remove brackets from IPv6
-		host = strings.TrimPrefix(host, "[")
-		host = strings.TrimSuffix(host, "]")
-		return host
-	}
-	return remoteAddr
-}

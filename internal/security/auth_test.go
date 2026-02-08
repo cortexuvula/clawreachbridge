@@ -14,6 +14,8 @@ func TestExtractBearerToken(t *testing.T) {
 		{"Basic abc123", ""},
 		{"", ""},
 		{"BearerNoSpace", ""},
+		{"Bearer token  ", "token"},   // trailing whitespace trimmed
+		{"Bearer  token ", "token"},   // leading+trailing whitespace trimmed
 	}
 
 	for _, tt := range tests {
@@ -51,24 +53,3 @@ func TestTokenMatch(t *testing.T) {
 	}
 }
 
-func TestExtractClientIP(t *testing.T) {
-	tests := []struct {
-		addr string
-		want string
-	}{
-		{"100.64.0.1:8080", "100.64.0.1"},
-		{"192.168.1.1:443", "192.168.1.1"},
-		{"[::1]:8080", "::1"},
-		{"[fd7a:115c:a1e0::1]:8080", "fd7a:115c:a1e0::1"},
-		{"127.0.0.1:0", "127.0.0.1"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.addr, func(t *testing.T) {
-			got := ExtractClientIP(tt.addr)
-			if got != tt.want {
-				t.Errorf("ExtractClientIP(%q) = %q, want %q", tt.addr, got, tt.want)
-			}
-		})
-	}
-}
