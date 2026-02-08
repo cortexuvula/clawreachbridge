@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ClawReach Bridge Admin</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <header>
+        <h1>ClawReach Bridge</h1>
+        <span id="version" class="version"></span>
+    </header>
+
+    <nav>
+        <button class="tab active" data-tab="dashboard">Dashboard</button>
+        <button class="tab" data-tab="connections">Connections</button>
+        <button class="tab" data-tab="config">Config</button>
+        <button class="tab" data-tab="logs">Logs</button>
+        <button class="tab" data-tab="controls">Controls</button>
+    </nav>
+
+    <main>
+        <!-- Dashboard Tab -->
+        <section id="tab-dashboard" class="tab-content active">
+            <div class="cards">
+                <div class="card">
+                    <div class="card-label">Status</div>
+                    <div class="card-value" id="gateway-status">--</div>
+                </div>
+                <div class="card">
+                    <div class="card-label">Uptime</div>
+                    <div class="card-value" id="uptime">--</div>
+                </div>
+                <div class="card">
+                    <div class="card-label">Active Connections</div>
+                    <div class="card-value" id="active-conns">--</div>
+                </div>
+                <div class="card">
+                    <div class="card-label">Total Connections</div>
+                    <div class="card-value" id="total-conns">--</div>
+                </div>
+                <div class="card">
+                    <div class="card-label">Total Messages</div>
+                    <div class="card-value" id="total-msgs">--</div>
+                </div>
+                <div class="card">
+                    <div class="card-label">Memory</div>
+                    <div class="card-value" id="memory">--</div>
+                </div>
+                <div class="card">
+                    <div class="card-label">Goroutines</div>
+                    <div class="card-value" id="goroutines">--</div>
+                </div>
+                <div class="card">
+                    <div class="card-label">Build</div>
+                    <div class="card-value card-value-small" id="build-info">--</div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Connections Tab -->
+        <section id="tab-connections" class="tab-content">
+            <table id="connections-table">
+                <thead>
+                    <tr>
+                        <th>IP Address</th>
+                        <th>Active Connections</th>
+                    </tr>
+                </thead>
+                <tbody id="connections-body">
+                    <tr><td colspan="2" class="empty">No active connections</td></tr>
+                </tbody>
+            </table>
+        </section>
+
+        <!-- Config Tab -->
+        <section id="tab-config" class="tab-content">
+            <div class="config-notice">Changes are applied in-memory only and do not persist across restarts.</div>
+
+            <h3>Reloadable Settings</h3>
+            <form id="config-form">
+                <div class="form-row">
+                    <label for="cfg-log-level">Log Level</label>
+                    <select id="cfg-log-level" name="log_level">
+                        <option value="debug">debug</option>
+                        <option value="info">info</option>
+                        <option value="warn">warn</option>
+                        <option value="error">error</option>
+                    </select>
+                </div>
+                <div class="form-row">
+                    <label for="cfg-max-conns">Max Connections</label>
+                    <input type="number" id="cfg-max-conns" name="max_connections" min="1" max="65535">
+                </div>
+                <div class="form-row">
+                    <label for="cfg-max-conns-ip">Max Connections/IP</label>
+                    <input type="number" id="cfg-max-conns-ip" name="max_connections_per_ip" min="1">
+                </div>
+                <div class="form-row">
+                    <label for="cfg-max-msg">Max Message Size</label>
+                    <input type="number" id="cfg-max-msg" name="max_message_size" min="1">
+                </div>
+                <div class="form-row">
+                    <label for="cfg-rate-enabled">Rate Limit Enabled</label>
+                    <input type="checkbox" id="cfg-rate-enabled" name="rate_limit_enabled">
+                </div>
+                <div class="form-row">
+                    <label for="cfg-conns-min">Connections/Minute</label>
+                    <input type="number" id="cfg-conns-min" name="connections_per_minute" min="1">
+                </div>
+                <div class="form-row">
+                    <label for="cfg-msgs-sec">Messages/Second</label>
+                    <input type="number" id="cfg-msgs-sec" name="messages_per_second" min="1">
+                </div>
+                <button type="submit" class="btn btn-primary">Apply Changes</button>
+                <span id="config-status" class="status-msg"></span>
+            </form>
+
+            <h3>Read-Only Settings</h3>
+            <div id="config-readonly" class="readonly-config"></div>
+        </section>
+
+        <!-- Logs Tab -->
+        <section id="tab-logs" class="tab-content">
+            <div class="log-controls">
+                <label>Level:
+                    <select id="log-level-filter">
+                        <option value="debug">debug</option>
+                        <option value="info" selected>info</option>
+                        <option value="warn">warn</option>
+                        <option value="error">error</option>
+                    </select>
+                </label>
+                <label>Limit:
+                    <input type="number" id="log-limit" value="100" min="1" max="1000">
+                </label>
+                <label>
+                    <input type="checkbox" id="log-auto-refresh" checked> Auto-refresh
+                </label>
+            </div>
+            <div id="log-viewer" class="log-viewer"></div>
+        </section>
+
+        <!-- Controls Tab -->
+        <section id="tab-controls" class="tab-content">
+            <div class="control-group">
+                <h3>Service Controls</h3>
+                <p>Reload configuration from disk (same as <code>kill -HUP</code>):</p>
+                <button id="btn-reload" class="btn btn-primary">Reload Config</button>
+                <span id="reload-status" class="status-msg"></span>
+            </div>
+            <div class="control-group danger-zone">
+                <h3>Danger Zone</h3>
+                <p>Restart the service (triggers <code>os.Exit(1)</code>, systemd restarts):</p>
+                <button id="btn-restart" class="btn btn-danger">Restart Service</button>
+                <span id="restart-status" class="status-msg"></span>
+            </div>
+        </section>
+    </main>
+
+    <script src="app.js"></script>
+</body>
+</html>

@@ -11,6 +11,15 @@ import (
 // Setup configures the global slog logger based on config settings.
 // Returns the lumberjack logger (if file logging) so it can be closed on shutdown.
 func Setup(level, format, file string, maxSizeMB, maxBackups, maxAgeDays int, compress bool) *lumberjack.Logger {
+	handler, lj := SetupHandler(level, format, file, maxSizeMB, maxBackups, maxAgeDays, compress)
+	slog.SetDefault(slog.New(handler))
+	return lj
+}
+
+// SetupHandler creates a slog.Handler and optional lumberjack logger without
+// setting the global default. This allows callers to wrap the handler (e.g.
+// with TeeHandler) before calling slog.SetDefault.
+func SetupHandler(level, format, file string, maxSizeMB, maxBackups, maxAgeDays int, compress bool) (slog.Handler, *lumberjack.Logger) {
 	var w io.Writer = os.Stdout
 	var lj *lumberjack.Logger
 
@@ -36,8 +45,7 @@ func Setup(level, format, file string, maxSizeMB, maxBackups, maxAgeDays int, co
 		handler = slog.NewJSONHandler(w, opts)
 	}
 
-	slog.SetDefault(slog.New(handler))
-	return lj
+	return handler, lj
 }
 
 func parseLevel(level string) slog.Level {

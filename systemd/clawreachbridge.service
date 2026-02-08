@@ -12,7 +12,8 @@ Group=clawreachbridge
 ExecStartPre=/usr/local/bin/clawreachbridge validate --config /etc/clawreachbridge/config.yaml
 ExecStart=/usr/local/bin/clawreachbridge start --config /etc/clawreachbridge/config.yaml
 ExecReload=/bin/kill -HUP $MAINPID
-Restart=on-failure
+Restart=always
+RestartPreventExitStatus=0
 RestartSec=5s
 WatchdogSec=30s
 

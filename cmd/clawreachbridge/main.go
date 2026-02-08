@@ -19,10 +19,12 @@ import (
 	"github.com/cortexuvula/clawreachbridge/internal/config"
 	"github.com/cortexuvula/clawreachbridge/internal/health"
 	"github.com/cortexuvula/clawreachbridge/internal/logging"
+	"github.com/cortexuvula/clawreachbridge/internal/logring"
 	"github.com/cortexuvula/clawreachbridge/internal/metrics"
 	"github.com/cortexuvula/clawreachbridge/internal/proxy"
 	"github.com/cortexuvula/clawreachbridge/internal/security"
 	"github.com/cortexuvula/clawreachbridge/internal/setup"
+	"github.com/cortexuvula/clawreachbridge/internal/webui"
 
 	"golang.org/x/time/rate"
 )
@@ -135,8 +137,9 @@ func runBridge(configPath string, verbose bool) error {
 		cfg.Logging.Level = "debug"
 	}
 
-	// Set up logging
-	lj := logging.Setup(
+	// Set up logging with ring buffer for web UI log viewer
+	ring := logring.NewRingBuffer(1000)
+	baseHandler, lj := logging.SetupHandler(
 		cfg.Logging.Level,
 		cfg.Logging.Format,
 		cfg.Logging.File,
@@ -145,9 +148,12 @@ func runBridge(configPath string, verbose bool) error {
 		cfg.Logging.MaxAgeDays,
 		cfg.Logging.Compress,
 	)
+	slog.SetDefault(slog.New(logring.NewTeeHandler(baseHandler, ring)))
 	if lj != nil {
 		defer lj.Close()
 	}
+
+	startTime := time.Now()
 
 	slog.Info("starting ClawReach Bridge",
 		"version", Version,
@@ -184,6 +190,43 @@ func runBridge(configPath string, verbose bool) error {
 		slog.Info("prometheus metrics enabled", "endpoint", cfg.Monitoring.MetricsEndpoint)
 	}
 
+	// Reload config closure — shared by SIGHUP handler and web UI
+	reloadConfig := func() error {
+		newCfg, err := config.Load(configPath)
+		if err != nil {
+			return fmt.Errorf("config reload failed: %w", err)
+		}
+
+		warnings := config.IsReloadSafe(cfg, newCfg)
+		for _, w := range warnings {
+			slog.Warn("config reload warning", "warning", w)
+		}
+
+		cfg = cfg.ApplyReloadableFields(newCfg)
+		handler.UpdateConfig(cfg)
+
+		// Update rate limiter
+		if cfg.Security.RateLimit.Enabled && rl != nil {
+			r := rate.Limit(float64(cfg.Security.RateLimit.ConnectionsPerMinute) / 60.0)
+			rl.UpdateRate(r, cfg.Security.RateLimit.ConnectionsPerMinute)
+		}
+
+		// Re-setup logging with new level, re-wrap with TeeHandler
+		newHandler, _ := logging.SetupHandler(
+			cfg.Logging.Level,
+			cfg.Logging.Format,
+			cfg.Logging.File,
+			cfg.Logging.MaxSizeMB,
+			cfg.Logging.MaxBackups,
+			cfg.Logging.MaxAgeDays,
+			cfg.Logging.Compress,
+		)
+		slog.SetDefault(slog.New(logring.NewTeeHandler(newHandler, ring)))
+
+		slog.Info("config reloaded successfully")
+		return nil
+	}
+
 	// Bind proxy listener synchronously (detect port conflicts before sd_notify)
 	proxyListener, err := net.Listen("tcp", cfg.Bridge.ListenAddress)
 	if err != nil {
@@ -209,6 +252,23 @@ func runBridge(configPath string, verbose bool) error {
 		if cfg.Monitoring.MetricsEnabled {
 			healthMux.Handle(cfg.Monitoring.MetricsEndpoint, promhttp.Handler())
 		}
+
+		// Web admin UI on health listener
+		adminUI := webui.New(webui.Dependencies{
+			Proxy:       p,
+			Handler:     handler,
+			RateLimiter: rl,
+			RingBuffer:  ring,
+			Version:     Version,
+			BuildTime:   BuildTime,
+			GitCommit:   GitCommit,
+			GatewayURL:  cfg.Bridge.GatewayURL,
+			StartTime:   startTime,
+			GetConfig:   func() *config.Config { return handler.GetConfig() },
+			ReloadFunc:  reloadConfig,
+		})
+		healthMux.Handle("/ui/", adminUI.StaticHandler())
+		healthMux.Handle("/api/v1/", adminUI.APIHandler())
 
 		healthListener, err = net.Listen("tcp", cfg.Health.ListenAddress)
 		if err != nil {
@@ -283,38 +343,9 @@ func runBridge(configPath string, verbose bool) error {
 		switch sig {
 		case syscall.SIGHUP:
 			slog.Info("received SIGHUP, reloading config")
-			newCfg, err := config.Load(configPath)
-			if err != nil {
+			if err := reloadConfig(); err != nil {
 				slog.Error("config reload failed", "error", err)
-				continue
 			}
-
-			warnings := config.IsReloadSafe(cfg, newCfg)
-			for _, w := range warnings {
-				slog.Warn("config reload warning", "warning", w)
-			}
-
-			cfg = cfg.ApplyReloadableFields(newCfg)
-			handler.UpdateConfig(cfg)
-
-			// Update rate limiter
-			if cfg.Security.RateLimit.Enabled && rl != nil {
-				r := rate.Limit(float64(cfg.Security.RateLimit.ConnectionsPerMinute) / 60.0)
-				rl.UpdateRate(r, cfg.Security.RateLimit.ConnectionsPerMinute)
-			}
-
-			// Re-setup logging with new level
-			logging.Setup(
-				cfg.Logging.Level,
-				cfg.Logging.Format,
-				cfg.Logging.File,
-				cfg.Logging.MaxSizeMB,
-				cfg.Logging.MaxBackups,
-				cfg.Logging.MaxAgeDays,
-				cfg.Logging.Compress,
-			)
-
-			slog.Info("config reloaded successfully")
 
 		case syscall.SIGTERM, syscall.SIGINT:
 			slog.Info("received shutdown signal, draining connections",
@@ -379,7 +410,6 @@ func checkHealth(healthURL string) error {
 	return nil
 }
 
-
 func printSystemdUnit() {
 	fmt.Print(`[Unit]
 Description=ClawReach Bridge - Secure WebSocket Proxy
@@ -395,7 +425,8 @@ Group=clawreachbridge
 ExecStartPre=/usr/local/bin/clawreachbridge validate --config /etc/clawreachbridge/config.yaml
 ExecStart=/usr/local/bin/clawreachbridge start --config /etc/clawreachbridge/config.yaml
 ExecReload=/bin/kill -HUP $MAINPID
-Restart=on-failure
+Restart=always
+RestartPreventExitStatus=0
 RestartSec=5s
 WatchdogSec=30s
 TimeoutStartSec=30s

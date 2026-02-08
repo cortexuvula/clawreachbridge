@@ -86,6 +86,37 @@ func TestHttpToWS(t *testing.T) {
 	}
 }
 
+func TestActiveIPConnections(t *testing.T) {
+	p := New()
+
+	// Empty initially
+	snap := p.ActiveIPConnections()
+	if len(snap) != 0 {
+		t.Errorf("ActiveIPConnections() = %v, want empty", snap)
+	}
+
+	p.TryIncrementConnections("10.0.0.1", 1000, 100)
+	p.TryIncrementConnections("10.0.0.1", 1000, 100)
+	p.TryIncrementConnections("10.0.0.2", 1000, 100)
+
+	snap = p.ActiveIPConnections()
+	if len(snap) != 2 {
+		t.Fatalf("ActiveIPConnections() has %d entries, want 2", len(snap))
+	}
+	if snap["10.0.0.1"] != 2 {
+		t.Errorf("snap[10.0.0.1] = %d, want 2", snap["10.0.0.1"])
+	}
+	if snap["10.0.0.2"] != 1 {
+		t.Errorf("snap[10.0.0.2] = %d, want 1", snap["10.0.0.2"])
+	}
+
+	// Mutating the snapshot should not affect the proxy
+	snap["10.0.0.1"] = 999
+	if p.ConnectionCountForIP("10.0.0.1") != 2 {
+		t.Error("mutating snapshot affected proxy state")
+	}
+}
+
 func TestTryIncrementConnections(t *testing.T) {
 	p := New()
 

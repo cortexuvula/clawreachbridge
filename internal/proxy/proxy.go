@@ -84,3 +84,14 @@ func (p *Proxy) TotalConnections() int64 {
 func (p *Proxy) TotalMessages() int64 {
 	return p.totalMessages.Load()
 }
+
+// ActiveIPConnections returns a snapshot of per-IP active connection counts.
+func (p *Proxy) ActiveIPConnections() map[string]int {
+	p.ipMu.Lock()
+	defer p.ipMu.Unlock()
+	snapshot := make(map[string]int, len(p.ipConnections))
+	for ip, count := range p.ipConnections {
+		snapshot[ip] = count
+	}
+	return snapshot
+}
