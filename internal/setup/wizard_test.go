@@ -293,8 +293,11 @@ func TestRunWizard_EOF_WithTailscale(t *testing.T) {
 	}
 }
 
-func TestIsPortAvailable(t *testing.T) {
-	_ = isPortAvailable("127.0.0.1", "0")
+func TestCheckPortAvailable(t *testing.T) {
+	// Port 0 is always available (OS assigns ephemeral)
+	if reason := checkPortAvailable("127.0.0.1", "0"); reason != "" {
+		t.Errorf("checkPortAvailable(127.0.0.1, 0) = %q, want empty", reason)
+	}
 }
 
 func TestDetectTailscaleIP(t *testing.T) {

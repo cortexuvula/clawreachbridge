@@ -2,6 +2,7 @@ package setup
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -13,6 +14,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/cortexuvula/clawreachbridge/internal/config"
@@ -104,8 +106,8 @@ func RunWizard(in io.Reader, out io.Writer, opts WizardOptions) error {
 	listenAddress := net.JoinHostPort(listenHost, listenPort)
 
 	// Check if port is available
-	if !isPortAvailable(listenHost, listenPort) {
-		fmt.Fprintf(out, "  WARNING: Port %s on %s appears to be in use\n\n", listenPort, listenHost)
+	if reason := checkPortAvailable(listenHost, listenPort); reason != "" {
+		fmt.Fprintf(out, "  WARNING: Port %s on %s %s\n\n", listenPort, listenHost, reason)
 	}
 
 	// Step 4: Health port
@@ -115,8 +117,8 @@ func RunWizard(in io.Reader, out io.Writer, opts WizardOptions) error {
 	healthAddress := net.JoinHostPort("127.0.0.1", healthPort)
 
 	// Check if health port is available
-	if !isPortAvailable("127.0.0.1", healthPort) {
-		fmt.Fprintf(out, "  WARNING: Port %s on 127.0.0.1 appears to be in use\n\n", healthPort)
+	if reason := checkPortAvailable("127.0.0.1", healthPort); reason != "" {
+		fmt.Fprintf(out, "  WARNING: Port %s on 127.0.0.1 %s\n\n", healthPort, reason)
 	}
 
 	// Step 5: Auth token (optional)
@@ -251,14 +253,18 @@ func checkGateway(out io.Writer, gatewayURL string) {
 	fmt.Fprintf(out, "  Gateway at %s is reachable.\n\n", gatewayURL)
 }
 
-// isPortAvailable checks if a TCP port is free on the given host.
-func isPortAvailable(host, port string) bool {
+// checkPortAvailable checks if a TCP port is free on the given host.
+// Returns empty string if available, or a reason string if not.
+func checkPortAvailable(host, port string) string {
 	ln, err := net.Listen("tcp", net.JoinHostPort(host, port))
 	if err != nil {
-		return false
+		if errors.Is(err, syscall.EACCES) {
+			return "permission denied (try sudo or a port >= 1024)"
+		}
+		return "appears to be in use"
 	}
 	ln.Close()
-	return true
+	return ""
 }
 
 // isSystemdAvailable checks if systemctl is available.
