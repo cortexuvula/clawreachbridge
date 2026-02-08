@@ -6,9 +6,11 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/user"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -72,6 +74,11 @@ func RunWizard(in io.Reader, out io.Writer, opts WizardOptions) error {
 		fmt.Sprintf("Gateway URL [%s]: ", defaultGatewayURL),
 		defaultGatewayURL)
 
+	// Validate gateway URL format (warning only)
+	if u, err := url.Parse(gatewayURL); err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+		fmt.Fprintf(out, "  WARNING: %q may not be a valid gateway URL (expected http:// or https://)\n\n", gatewayURL)
+	}
+
 	// Check gateway reachability (warning only)
 	gwCheck := checkGateway
 	if opts.CheckGateway != nil {
@@ -81,10 +88,7 @@ func RunWizard(in io.Reader, out io.Writer, opts WizardOptions) error {
 
 	// Step 3: Listen port
 	defaultAddr := defaultListenPort
-	if tailscaleIP != "" {
-		defaultAddr = defaultListenPort
-	}
-	listenPort := prompt(scanner, out,
+	listenPort := promptPort(scanner, out,
 		fmt.Sprintf("Listen port [%s]: ", defaultAddr),
 		defaultAddr)
 
@@ -105,10 +109,15 @@ func RunWizard(in io.Reader, out io.Writer, opts WizardOptions) error {
 	}
 
 	// Step 4: Health port
-	healthPort := prompt(scanner, out,
+	healthPort := promptPort(scanner, out,
 		fmt.Sprintf("Health check port [%s]: ", defaultHealthPort),
 		defaultHealthPort)
 	healthAddress := net.JoinHostPort("127.0.0.1", healthPort)
+
+	// Check if health port is available
+	if !isPortAvailable("127.0.0.1", healthPort) {
+		fmt.Fprintf(out, "  WARNING: Port %s on 127.0.0.1 appears to be in use\n\n", healthPort)
+	}
 
 	// Step 5: Auth token (optional)
 	authToken := prompt(scanner, out,
@@ -129,7 +138,7 @@ func RunWizard(in io.Reader, out io.Writer, opts WizardOptions) error {
 	origin := "https://gateway.local"
 	configContent := generateConfig(listenAddress, gatewayURL, origin, healthAddress, authToken)
 
-	if err := writeConfig(configPath, configContent, isRoot); err != nil {
+	if err := writeConfig(configPath, configContent, isRoot, out); err != nil {
 		return fmt.Errorf("writing config: %w", err)
 	}
 	fmt.Fprintln(out, "  Config written successfully.")
@@ -182,6 +191,30 @@ func prompt(scanner *bufio.Scanner, out io.Writer, message, defaultVal string) s
 		}
 	}
 	return defaultVal
+}
+
+// validatePort checks that a port string is a valid TCP port (1-65535).
+func validatePort(port string) bool {
+	n, err := strconv.Atoi(port)
+	if err != nil {
+		return false
+	}
+	return n >= 1 && n <= 65535
+}
+
+// promptPort prompts for a port, re-prompting on invalid input.
+// Returns defaultVal on empty/EOF input.
+func promptPort(scanner *bufio.Scanner, out io.Writer, message, defaultVal string) string {
+	val := prompt(scanner, out, message, defaultVal)
+	for !validatePort(val) {
+		fmt.Fprintf(out, "  Invalid port %q: must be a number between 1 and 65535\n", val)
+		val = prompt(scanner, out, message, defaultVal)
+		// If we got the default back (EOF/empty), and default is valid, accept it
+		if val == defaultVal {
+			return defaultVal
+		}
+	}
+	return val
 }
 
 // detectTailscaleIP finds a local Tailscale IP address.
@@ -267,7 +300,9 @@ func startSystemdService(out io.Writer) error {
 func generateConfig(listenAddress, gatewayURL, origin, healthAddress, authToken string) string {
 	authTokenLine := `  auth_token: ""`
 	if authToken != "" {
-		authTokenLine = fmt.Sprintf(`  auth_token: "%s"`, authToken)
+		escaped := strings.ReplaceAll(authToken, `\`, `\\`)
+		escaped = strings.ReplaceAll(escaped, `"`, `\"`)
+		authTokenLine = fmt.Sprintf(`  auth_token: "%s"`, escaped)
 	}
 
 	return fmt.Sprintf(`# ClawReach Bridge Configuration
@@ -330,9 +365,11 @@ monitoring:
 }
 
 // writeConfig writes the config file, creating parent directories as needed.
-func writeConfig(path, content string, setOwnership bool) error {
+func writeConfig(path, content string, setOwnership bool, out io.Writer) error {
+	path = filepath.Clean(path)
+
 	// Ensure parent directory exists
-	dir := path[:strings.LastIndex(path, "/")]
+	dir := filepath.Dir(path)
 	if dir != "" && dir != "." {
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			return fmt.Errorf("creating config directory %s: %w", dir, err)
@@ -346,12 +383,18 @@ func writeConfig(path, content string, setOwnership bool) error {
 	// Set ownership to clawreachbridge:clawreachbridge if running as root
 	if setOwnership {
 		u, err := user.Lookup("clawreachbridge")
-		if err == nil {
+		if err != nil {
+			fmt.Fprintf(out, "  WARNING: Could not look up user clawreachbridge: %v\n", err)
+		} else {
 			g, err := user.LookupGroup("clawreachbridge")
-			if err == nil {
+			if err != nil {
+				fmt.Fprintf(out, "  WARNING: Could not look up group clawreachbridge: %v\n", err)
+			} else {
 				uid, _ := strconv.Atoi(u.Uid)
 				gid, _ := strconv.Atoi(g.Gid)
-				os.Chown(path, uid, gid)
+				if err := os.Chown(path, uid, gid); err != nil {
+					fmt.Fprintf(out, "  WARNING: Could not set ownership to clawreachbridge:clawreachbridge: %v\n", err)
+				}
 			}
 		}
 	}
