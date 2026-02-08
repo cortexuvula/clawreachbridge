@@ -141,7 +141,7 @@ restart_if_running() {
     fi
 
     info "Restarting service..."
-    if sudo systemctl restart clawreachbridge; then
+    if timeout 30 sudo systemctl restart clawreachbridge; then
         # Brief wait then verify
         sleep 2
         if systemctl is-active --quiet clawreachbridge 2>/dev/null; then

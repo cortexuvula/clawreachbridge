@@ -243,7 +243,14 @@ func runBridge(configPath string, verbose bool) error {
 	}()
 
 	// Notify systemd that we're ready (both listeners are bound)
-	daemon.SdNotify(false, daemon.SdNotifyReady)
+	sent, notifyErr := daemon.SdNotify(false, daemon.SdNotifyReady)
+	if notifyErr != nil {
+		slog.Error("sd_notify READY failed", "error", notifyErr)
+	} else if !sent {
+		slog.Warn("sd_notify READY not sent (NOTIFY_SOCKET not set — not running under systemd?)")
+	} else {
+		slog.Info("sd_notify READY sent")
+	}
 
 	// Start watchdog heartbeat (send every 15s for 30s WatchdogSec)
 	watchdogCtx, watchdogCancel := context.WithCancel(context.Background())
@@ -259,6 +266,8 @@ func runBridge(configPath string, verbose bool) error {
 					slog.Warn("failed to notify watchdog", "error", err)
 				} else if sent {
 					slog.Debug("watchdog keepalive sent")
+				} else {
+					slog.Debug("watchdog notify skipped (NOTIFY_SOCKET not set)")
 				}
 			case <-watchdogCtx.Done():
 				return
@@ -389,6 +398,7 @@ ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=5s
 WatchdogSec=30s
+TimeoutStartSec=30s
 
 # Security hardening
 ProtectSystem=strict
