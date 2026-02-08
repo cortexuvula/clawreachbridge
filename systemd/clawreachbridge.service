@@ -21,13 +21,23 @@ ProtectSystem=strict
 ProtectHome=true
 NoNewPrivileges=true
 PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
 ReadOnlyPaths=/etc/clawreachbridge
 LogsDirectory=clawreachbridge
 StateDirectory=clawreachbridge
 LimitNOFILE=65535
 
 # Memory safety net: ~15MB base + ~20KB/connection × 1000 max = ~35MB typical
-# Set headroom for message buffering spikes (max_message_size × active conns)
+# Set headroom for message buffering spikes (max_message_size=256KB × active conns)
 MemoryMax=128M
 
 # Logging

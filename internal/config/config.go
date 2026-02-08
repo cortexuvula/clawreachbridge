@@ -23,16 +23,18 @@ type Config struct {
 
 // BridgeConfig contains the core proxy settings.
 type BridgeConfig struct {
-	ListenAddress  string        `yaml:"listen_address"`
-	GatewayURL     string        `yaml:"gateway_url"`
-	Origin         string        `yaml:"origin"`
-	DrainTimeout   time.Duration `yaml:"drain_timeout"`
-	MaxMessageSize int64         `yaml:"max_message_size"`
-	PingInterval   time.Duration `yaml:"ping_interval"`
-	PongTimeout    time.Duration `yaml:"pong_timeout"`
-	WriteTimeout   time.Duration `yaml:"write_timeout"`
-	DialTimeout    time.Duration `yaml:"dial_timeout"`
-	TLS            TLSConfig     `yaml:"tls"`
+	ListenAddress       string        `yaml:"listen_address"`
+	GatewayURL          string        `yaml:"gateway_url"`
+	Origin              string        `yaml:"origin"`
+	DrainTimeout        time.Duration `yaml:"drain_timeout"`
+	MaxMessageSize      int64         `yaml:"max_message_size"`
+	PingInterval        time.Duration `yaml:"ping_interval"`
+	PongTimeout         time.Duration `yaml:"pong_timeout"`
+	WriteTimeout        time.Duration `yaml:"write_timeout"`
+	ReadTimeout         time.Duration `yaml:"read_timeout"`
+	DialTimeout         time.Duration `yaml:"dial_timeout"`
+	AllowedSubprotocols []string      `yaml:"allowed_subprotocols"`
+	TLS                 TLSConfig     `yaml:"tls"`
 }
 
 // TLSConfig contains optional TLS settings.
@@ -74,6 +76,7 @@ type HealthConfig struct {
 	Enabled       bool   `yaml:"enabled"`
 	Endpoint      string `yaml:"endpoint"`
 	ListenAddress string `yaml:"listen_address"`
+	Detailed      bool   `yaml:"detailed"`
 }
 
 // MonitoringConfig contains metrics settings.
@@ -90,10 +93,11 @@ func DefaultConfig() *Config {
 			GatewayURL:     "http://localhost:18800",
 			Origin:         "https://gateway.local",
 			DrainTimeout:   30 * time.Second,
-			MaxMessageSize: 1048576, // 1MB
+			MaxMessageSize: 262144, // 256KB
 			PingInterval:   30 * time.Second,
 			PongTimeout:    10 * time.Second,
 			WriteTimeout:   10 * time.Second,
+			ReadTimeout:    60 * time.Second,
 			DialTimeout:    10 * time.Second,
 		},
 		Security: SecurityConfig{
@@ -118,6 +122,7 @@ func DefaultConfig() *Config {
 			Enabled:       true,
 			Endpoint:      "/health",
 			ListenAddress: "127.0.0.1:8081",
+			Detailed:      true,
 		},
 		Monitoring: MonitoringConfig{
 			MetricsEnabled:  false,
@@ -182,8 +187,36 @@ func (c *Config) Validate() error {
 	if c.Bridge.WriteTimeout <= 0 {
 		return fmt.Errorf("bridge.write_timeout must be positive")
 	}
+	if c.Bridge.ReadTimeout <= 0 {
+		return fmt.Errorf("bridge.read_timeout must be positive")
+	}
 	if c.Bridge.DialTimeout <= 0 {
 		return fmt.Errorf("bridge.dial_timeout must be positive")
+	}
+
+	// Upper bounds
+	if c.Bridge.MaxMessageSize > 67108864 {
+		return fmt.Errorf("bridge.max_message_size must not exceed 67108864 (64MB)")
+	}
+	if c.Bridge.DrainTimeout > 5*time.Minute {
+		return fmt.Errorf("bridge.drain_timeout must not exceed 5m")
+	}
+	if c.Bridge.WriteTimeout > 5*time.Minute {
+		return fmt.Errorf("bridge.write_timeout must not exceed 5m")
+	}
+	if c.Bridge.ReadTimeout > 5*time.Minute {
+		return fmt.Errorf("bridge.read_timeout must not exceed 5m")
+	}
+	if c.Bridge.DialTimeout > 5*time.Minute {
+		return fmt.Errorf("bridge.dial_timeout must not exceed 5m")
+	}
+
+	// Listen address safety check
+	if c.Security.TailscaleOnly {
+		host, _, _ := net.SplitHostPort(c.Bridge.ListenAddress)
+		if host == "0.0.0.0" || host == "::" || host == "" {
+			return fmt.Errorf("bridge.listen_address should not bind to all interfaces when security.tailscale_only is true (use a Tailscale IP)")
+		}
 	}
 
 	// TLS validation
@@ -200,8 +233,14 @@ func (c *Config) Validate() error {
 	if c.Security.MaxConnections <= 0 {
 		return fmt.Errorf("security.max_connections must be positive")
 	}
+	if c.Security.MaxConnections > 65535 {
+		return fmt.Errorf("security.max_connections must not exceed 65535")
+	}
 	if c.Security.MaxConnectionsPerIP <= 0 {
 		return fmt.Errorf("security.max_connections_per_ip must be positive")
+	}
+	if c.Security.MaxConnectionsPerIP > c.Security.MaxConnections {
+		return fmt.Errorf("security.max_connections_per_ip must not exceed security.max_connections")
 	}
 	if c.Security.RateLimit.Enabled {
 		if c.Security.RateLimit.ConnectionsPerMinute <= 0 {
@@ -248,6 +287,7 @@ func applyEnvOverrides(cfg *Config) {
 		"CLAWREACH_BRIDGE_PING_INTERVAL":            func(v string) { cfg.Bridge.PingInterval = parseDuration(v, cfg.Bridge.PingInterval) },
 		"CLAWREACH_BRIDGE_PONG_TIMEOUT":             func(v string) { cfg.Bridge.PongTimeout = parseDuration(v, cfg.Bridge.PongTimeout) },
 		"CLAWREACH_BRIDGE_WRITE_TIMEOUT":            func(v string) { cfg.Bridge.WriteTimeout = parseDuration(v, cfg.Bridge.WriteTimeout) },
+		"CLAWREACH_BRIDGE_READ_TIMEOUT":             func(v string) { cfg.Bridge.ReadTimeout = parseDuration(v, cfg.Bridge.ReadTimeout) },
 		"CLAWREACH_BRIDGE_DIAL_TIMEOUT":             func(v string) { cfg.Bridge.DialTimeout = parseDuration(v, cfg.Bridge.DialTimeout) },
 		"CLAWREACH_SECURITY_TAILSCALE_ONLY":         func(v string) { cfg.Security.TailscaleOnly = parseBool(v, cfg.Security.TailscaleOnly) },
 		"CLAWREACH_SECURITY_AUTH_TOKEN":             func(v string) { cfg.Security.AuthToken = v },

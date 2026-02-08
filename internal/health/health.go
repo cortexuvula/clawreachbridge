@@ -37,15 +37,17 @@ type Handler struct {
 	metrics    *metrics.Metrics // optional, nil if metrics disabled
 	gatewayURL string
 	version    string
+	detailed   bool
 }
 
 // NewHandler creates a new health check handler.
-func NewHandler(p *proxy.Proxy, gatewayURL, version string) *Handler {
+func NewHandler(p *proxy.Proxy, gatewayURL, version string, detailed bool) *Handler {
 	return &Handler{
 		startTime:  time.Now(),
 		proxy:      p,
 		gatewayURL: gatewayURL,
 		version:    version,
+		detailed:   detailed,
 	}
 }
 
@@ -76,21 +78,23 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		httpCode = http.StatusServiceUnavailable
 	}
 
-	var memStats runtime.MemStats
-	runtime.ReadMemStats(&memStats)
-
 	resp := Response{
 		Status:            status,
 		Uptime:            time.Since(h.startTime).Round(time.Second).String(),
 		ActiveConnections: h.proxy.ConnectionCount(),
 		GatewayReachable:  gatewayOK,
-		Version:           h.version,
 		Timestamp:         time.Now().UTC().Format(time.RFC3339),
-		Details: &Details{
+	}
+
+	if h.detailed {
+		var memStats runtime.MemStats
+		runtime.ReadMemStats(&memStats)
+		resp.Version = h.version
+		resp.Details = &Details{
 			TotalConnections: h.proxy.TotalConnections(),
 			TotalMessages:    h.proxy.TotalMessages(),
 			MemoryMB:         float64(memStats.Alloc) / 1024 / 1024,
-		},
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")

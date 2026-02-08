@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -26,7 +27,7 @@ func TestHandlerRejectNonTailscaleIP(t *testing.T) {
 	cfg := testConfig()
 	cfg.Security.TailscaleOnly = true
 
-	handler := NewHandler(cfg, New(), nil)
+	handler := NewHandler(cfg, New(), nil, context.Background())
 
 	req := httptest.NewRequest("GET", "/", nil)
 	req.RemoteAddr = "192.168.1.1:12345" // not a Tailscale IP
@@ -43,7 +44,7 @@ func TestHandlerAllowTailscaleIP(t *testing.T) {
 	cfg := testConfig()
 	cfg.Security.TailscaleOnly = true
 
-	handler := NewHandler(cfg, New(), nil)
+	handler := NewHandler(cfg, New(), nil, context.Background())
 
 	req := httptest.NewRequest("GET", "/", nil)
 	req.RemoteAddr = "100.64.0.1:12345" // Tailscale IP
@@ -62,7 +63,7 @@ func TestHandlerRejectMissingAuthToken(t *testing.T) {
 	cfg := testConfig()
 	cfg.Security.AuthToken = "secret-token"
 
-	handler := NewHandler(cfg, New(), nil)
+	handler := NewHandler(cfg, New(), nil, context.Background())
 
 	req := httptest.NewRequest("GET", "/", nil)
 	req.RemoteAddr = "127.0.0.1:12345"
@@ -79,7 +80,7 @@ func TestHandlerRejectWrongAuthToken(t *testing.T) {
 	cfg := testConfig()
 	cfg.Security.AuthToken = "secret-token"
 
-	handler := NewHandler(cfg, New(), nil)
+	handler := NewHandler(cfg, New(), nil, context.Background())
 
 	req := httptest.NewRequest("GET", "/", nil)
 	req.RemoteAddr = "127.0.0.1:12345"
@@ -97,7 +98,7 @@ func TestHandlerAcceptCorrectAuthToken(t *testing.T) {
 	cfg := testConfig()
 	cfg.Security.AuthToken = "secret-token"
 
-	handler := NewHandler(cfg, New(), nil)
+	handler := NewHandler(cfg, New(), nil, context.Background())
 
 	req := httptest.NewRequest("GET", "/", nil)
 	req.RemoteAddr = "127.0.0.1:12345"
@@ -116,7 +117,7 @@ func TestHandlerAcceptQueryParamToken(t *testing.T) {
 	cfg := testConfig()
 	cfg.Security.AuthToken = "secret-token"
 
-	handler := NewHandler(cfg, New(), nil)
+	handler := NewHandler(cfg, New(), nil, context.Background())
 
 	req := httptest.NewRequest("GET", "/?token=secret-token", nil)
 	req.RemoteAddr = "127.0.0.1:12345"
@@ -138,7 +139,7 @@ func TestHandlerRejectRateLimited(t *testing.T) {
 	rl := security.NewRateLimiter(r, 1) // burst of 1
 	defer rl.Stop()
 
-	handler := NewHandler(cfg, New(), rl)
+	handler := NewHandler(cfg, New(), rl, context.Background())
 
 	// First request — uses the one token in the bucket
 	req := httptest.NewRequest("GET", "/", nil)
@@ -162,9 +163,9 @@ func TestHandlerRejectMaxConnections(t *testing.T) {
 	cfg.Security.MaxConnections = 1
 
 	p := New()
-	p.IncrementConnections("127.0.0.1") // fill the slot
+	p.TryIncrementConnections("127.0.0.1", 1000, 100) // fill the slot
 
-	handler := NewHandler(cfg, p, nil)
+	handler := NewHandler(cfg, p, nil, context.Background())
 
 	req := httptest.NewRequest("GET", "/", nil)
 	req.RemoteAddr = "127.0.0.1:12345"
@@ -184,9 +185,9 @@ func TestHandlerRejectMaxConnectionsPerIP(t *testing.T) {
 	cfg.Security.MaxConnectionsPerIP = 1
 
 	p := New()
-	p.IncrementConnections("127.0.0.1") // fill the per-IP slot
+	p.TryIncrementConnections("127.0.0.1", 1000, 100) // fill the per-IP slot
 
-	handler := NewHandler(cfg, p, nil)
+	handler := NewHandler(cfg, p, nil, context.Background())
 
 	req := httptest.NewRequest("GET", "/", nil)
 	req.RemoteAddr = "127.0.0.1:12345"
@@ -204,7 +205,7 @@ func TestHandlerRejectMaxConnectionsPerIP(t *testing.T) {
 func TestHandlerBadRemoteAddr(t *testing.T) {
 	cfg := testConfig()
 
-	handler := NewHandler(cfg, New(), nil)
+	handler := NewHandler(cfg, New(), nil, context.Background())
 
 	req := httptest.NewRequest("GET", "/", nil)
 	req.RemoteAddr = "no-port-here" // invalid, no port
@@ -219,7 +220,7 @@ func TestHandlerBadRemoteAddr(t *testing.T) {
 
 func TestHandlerUpdateConfig(t *testing.T) {
 	cfg := testConfig()
-	handler := NewHandler(cfg, New(), nil)
+	handler := NewHandler(cfg, New(), nil, context.Background())
 
 	// Original config has no auth token
 	if handler.GetConfig().Security.AuthToken != "" {

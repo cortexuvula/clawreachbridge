@@ -72,11 +72,11 @@ func newTestSetup(t *testing.T, modCfg func(*config.Config)) (*httptest.Server, 
 		t.Cleanup(rl.Stop)
 	}
 
-	handler := proxy.NewHandler(cfg, p, rl)
+	handler := proxy.NewHandler(cfg, p, rl, context.Background())
 	bridge := httptest.NewServer(handler)
 
 	// 3. Health endpoint
-	healthHandler := health.NewHandler(p, gateway.URL, "test")
+	healthHandler := health.NewHandler(p, gateway.URL, "test", true)
 	healthMux := http.NewServeMux()
 	healthMux.Handle("/health", healthHandler)
 	healthSrv := httptest.NewServer(healthMux)

@@ -2,14 +2,25 @@ package security
 
 import (
 	"crypto/hmac"
+	crypto_rand "crypto/rand"
 	"crypto/sha256"
 	"strings"
 )
 
+var tokenCompareKey []byte
+
+func init() {
+	tokenCompareKey = make([]byte, 32)
+	if _, err := crypto_rand.Read(tokenCompareKey); err != nil {
+		panic("failed to generate random key for token comparison: " + err.Error())
+	}
+}
+
 // ExtractBearerToken parses "Bearer <token>" from the Authorization header.
+// The prefix match is case-insensitive per RFC 7235.
 func ExtractBearerToken(authHeader string) string {
-	const prefix = "Bearer "
-	if len(authHeader) > len(prefix) && authHeader[:len(prefix)] == prefix {
+	const prefix = "bearer "
+	if len(authHeader) > len(prefix) && strings.EqualFold(authHeader[:len(prefix)], prefix) {
 		return authHeader[len(prefix):]
 	}
 	return ""
@@ -20,12 +31,11 @@ func TokenMatch(provided, expected string) bool {
 	if provided == "" || expected == "" {
 		return false
 	}
-	// HMAC with a fixed key normalizes both values to the same length,
+	// HMAC with a random key normalizes both values to the same length,
 	// preventing the length leak in subtle.ConstantTimeCompare.
-	key := []byte("clawreach-token-compare")
-	h1 := hmac.New(sha256.New, key)
+	h1 := hmac.New(sha256.New, tokenCompareKey)
 	h1.Write([]byte(provided))
-	h2 := hmac.New(sha256.New, key)
+	h2 := hmac.New(sha256.New, tokenCompareKey)
 	h2.Write([]byte(expected))
 	return hmac.Equal(h1.Sum(nil), h2.Sum(nil))
 }

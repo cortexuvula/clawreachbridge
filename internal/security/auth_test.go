@@ -10,7 +10,7 @@ func TestExtractBearerToken(t *testing.T) {
 		{"Bearer my-secret-token", "my-secret-token"},
 		{"Bearer abc123", "abc123"},
 		{"Bearer ", ""},    // empty token after prefix
-		{"bearer abc", ""}, // wrong case
+		{"bearer abc", "abc"}, // case-insensitive prefix
 		{"Basic abc123", ""},
 		{"", ""},
 		{"BearerNoSpace", ""},

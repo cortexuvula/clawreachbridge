@@ -17,7 +17,7 @@ func TestHealthHandler_Healthy(t *testing.T) {
 	defer gateway.Close()
 
 	p := proxy.New()
-	h := NewHandler(p, gateway.URL, "test-version")
+	h := NewHandler(p, gateway.URL, "test-version", true)
 
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
 	rec := httptest.NewRecorder()
@@ -53,7 +53,7 @@ func TestHealthHandler_Healthy(t *testing.T) {
 func TestHealthHandler_GatewayDown(t *testing.T) {
 	p := proxy.New()
 	// Point to an address that won't respond
-	h := NewHandler(p, "http://127.0.0.1:1", "test-version")
+	h := NewHandler(p, "http://127.0.0.1:1", "test-version", true)
 
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
 	rec := httptest.NewRecorder()
@@ -84,10 +84,10 @@ func TestHealthHandler_WithConnections(t *testing.T) {
 	defer gateway.Close()
 
 	p := proxy.New()
-	p.IncrementConnections("100.64.0.1")
-	p.IncrementConnections("100.64.0.2")
+	p.TryIncrementConnections("100.64.0.1", 1000, 100)
+	p.TryIncrementConnections("100.64.0.2", 1000, 100)
 
-	h := NewHandler(p, gateway.URL, "test-version")
+	h := NewHandler(p, gateway.URL, "test-version", true)
 
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
 	rec := httptest.NewRecorder()
@@ -112,7 +112,7 @@ func TestHealthHandler_Gateway4xx(t *testing.T) {
 	defer gateway.Close()
 
 	p := proxy.New()
-	h := NewHandler(p, gateway.URL, "test-version")
+	h := NewHandler(p, gateway.URL, "test-version", true)
 
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
 	rec := httptest.NewRecorder()

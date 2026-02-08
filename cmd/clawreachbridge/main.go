@@ -155,6 +155,10 @@ func runBridge(configPath string, verbose bool) error {
 		"health", cfg.Health.ListenAddress,
 	)
 
+	// Create shutdown context (cancelled on SIGTERM/SIGINT to tear down active connections)
+	shutdownCtx, shutdownCancel := context.WithCancel(context.Background())
+	defer shutdownCancel()
+
 	// Create proxy and rate limiter
 	p := proxy.New()
 
@@ -169,7 +173,7 @@ func runBridge(configPath string, verbose bool) error {
 	}
 
 	// Create proxy handler
-	handler := proxy.NewHandler(cfg, p, rl)
+	handler := proxy.NewHandler(cfg, p, rl, shutdownCtx)
 
 	// Optional Prometheus metrics
 	var m *metrics.Metrics
@@ -189,7 +193,7 @@ func runBridge(configPath string, verbose bool) error {
 	// Health server (listens on 127.0.0.1:8081)
 	var healthServer *http.Server
 	if cfg.Health.Enabled {
-		healthHandler := health.NewHandler(p, cfg.Bridge.GatewayURL, Version)
+		healthHandler := health.NewHandler(p, cfg.Bridge.GatewayURL, Version, cfg.Health.Detailed)
 		if m != nil {
 			healthHandler.SetMetrics(m)
 		}
@@ -302,6 +306,9 @@ func runBridge(configPath string, verbose bool) error {
 				"drain_timeout", cfg.Bridge.DrainTimeout.String(),
 			)
 
+			// Cancel proxy connections so they drain
+			shutdownCancel()
+
 			// Stop watchdog
 			watchdogCancel()
 			daemon.SdNotify(false, daemon.SdNotifyStopping)
@@ -333,8 +340,14 @@ func runBridge(configPath string, verbose bool) error {
 	return nil
 }
 
-func checkHealth(url string) error {
-	resp, err := http.Get(url)
+func checkHealth(healthURL string) error {
+	client := &http.Client{
+		Timeout: 5 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	resp, err := client.Get(healthURL)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Health check failed: %v\n", err)
 		os.Exit(1)
@@ -375,13 +388,23 @@ ProtectSystem=strict
 ProtectHome=true
 NoNewPrivileges=true
 PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
 ReadOnlyPaths=/etc/clawreachbridge
 LogsDirectory=clawreachbridge
 StateDirectory=clawreachbridge
 LimitNOFILE=65535
 
 # Memory safety net: ~15MB base + ~20KB/connection × 1000 max = ~35MB typical
-# Set headroom for message buffering spikes (max_message_size × active conns)
+# Set headroom for message buffering spikes (max_message_size=256KB × active conns)
 MemoryMax=128M
 
 # Logging

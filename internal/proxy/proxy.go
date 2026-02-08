@@ -59,15 +59,6 @@ func (p *Proxy) TryIncrementConnections(ip string, maxGlobal, maxPerIP int) stri
 	return ""
 }
 
-// IncrementConnections increments both global and per-IP connection counters.
-func (p *Proxy) IncrementConnections(ip string) {
-	p.activeConnections.Add(1)
-	p.totalConnections.Add(1)
-	p.ipMu.Lock()
-	p.ipConnections[ip]++
-	p.ipMu.Unlock()
-}
-
 // DecrementConnections decrements both global and per-IP connection counters.
 func (p *Proxy) DecrementConnections(ip string) {
 	p.activeConnections.Add(-1)

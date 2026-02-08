@@ -16,8 +16,14 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.Bridge.GatewayURL != "http://localhost:18800" {
 		t.Errorf("default gateway_url = %q, want %q", cfg.Bridge.GatewayURL, "http://localhost:18800")
 	}
-	if cfg.Bridge.MaxMessageSize != 1048576 {
-		t.Errorf("default max_message_size = %d, want %d", cfg.Bridge.MaxMessageSize, 1048576)
+	if cfg.Bridge.MaxMessageSize != 262144 {
+		t.Errorf("default max_message_size = %d, want %d", cfg.Bridge.MaxMessageSize, 262144)
+	}
+	if cfg.Bridge.ReadTimeout != 60*time.Second {
+		t.Errorf("default read_timeout = %v, want %v", cfg.Bridge.ReadTimeout, 60*time.Second)
+	}
+	if !cfg.Health.Detailed {
+		t.Error("default health.detailed should be true")
 	}
 	if cfg.Bridge.DrainTimeout != 30*time.Second {
 		t.Errorf("default drain_timeout = %v, want %v", cfg.Bridge.DrainTimeout, 30*time.Second)
@@ -196,6 +202,65 @@ func TestValidation(t *testing.T) {
 			name:    "zero max_connections",
 			modify:  func(c *Config) { c.Security.MaxConnections = 0 },
 			wantErr: "security.max_connections must be positive",
+		},
+		{
+			name:    "zero read_timeout",
+			modify:  func(c *Config) { c.Bridge.ReadTimeout = 0 },
+			wantErr: "bridge.read_timeout must be positive",
+		},
+		{
+			name:    "max_message_size exceeds 64MB",
+			modify:  func(c *Config) { c.Bridge.MaxMessageSize = 67108865 },
+			wantErr: "bridge.max_message_size must not exceed 67108864",
+		},
+		{
+			name:    "max_connections exceeds 65535",
+			modify:  func(c *Config) { c.Security.MaxConnections = 70000 },
+			wantErr: "security.max_connections must not exceed 65535",
+		},
+		{
+			name: "max_connections_per_ip exceeds max_connections",
+			modify: func(c *Config) {
+				c.Security.MaxConnections = 100
+				c.Security.MaxConnectionsPerIP = 200
+			},
+			wantErr: "security.max_connections_per_ip must not exceed security.max_connections",
+		},
+		{
+			name:    "drain_timeout exceeds 5m",
+			modify:  func(c *Config) { c.Bridge.DrainTimeout = 6 * time.Minute },
+			wantErr: "bridge.drain_timeout must not exceed 5m",
+		},
+		{
+			name:    "write_timeout exceeds 5m",
+			modify:  func(c *Config) { c.Bridge.WriteTimeout = 6 * time.Minute },
+			wantErr: "bridge.write_timeout must not exceed 5m",
+		},
+		{
+			name:    "read_timeout exceeds 5m",
+			modify:  func(c *Config) { c.Bridge.ReadTimeout = 6 * time.Minute },
+			wantErr: "bridge.read_timeout must not exceed 5m",
+		},
+		{
+			name:    "dial_timeout exceeds 5m",
+			modify:  func(c *Config) { c.Bridge.DialTimeout = 6 * time.Minute },
+			wantErr: "bridge.dial_timeout must not exceed 5m",
+		},
+		{
+			name: "listen_address 0.0.0.0 with tailscale_only",
+			modify: func(c *Config) {
+				c.Security.TailscaleOnly = true
+				c.Bridge.ListenAddress = "0.0.0.0:8080"
+			},
+			wantErr: "bridge.listen_address should not bind to all interfaces",
+		},
+		{
+			name: "listen_address :: with tailscale_only",
+			modify: func(c *Config) {
+				c.Security.TailscaleOnly = true
+				c.Bridge.ListenAddress = "[::]:8080"
+			},
+			wantErr: "bridge.listen_address should not bind to all interfaces",
 		},
 	}
 

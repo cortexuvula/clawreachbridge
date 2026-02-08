@@ -9,9 +9,9 @@ func TestConnectionCount(t *testing.T) {
 		t.Errorf("initial ConnectionCount() = %d, want 0", got)
 	}
 
-	p.IncrementConnections("100.64.0.1")
-	p.IncrementConnections("100.64.0.1")
-	p.IncrementConnections("100.64.0.2")
+	p.TryIncrementConnections("100.64.0.1", 1000, 100)
+	p.TryIncrementConnections("100.64.0.1", 1000, 100)
+	p.TryIncrementConnections("100.64.0.2", 1000, 100)
 
 	if got := p.ConnectionCount(); got != 3 {
 		t.Errorf("ConnectionCount() = %d, want 3", got)
@@ -47,8 +47,8 @@ func TestConnectionCount(t *testing.T) {
 func TestTotalCounters(t *testing.T) {
 	p := New()
 
-	p.IncrementConnections("100.64.0.1")
-	p.IncrementConnections("100.64.0.1")
+	p.TryIncrementConnections("100.64.0.1", 1000, 100)
+	p.TryIncrementConnections("100.64.0.1", 1000, 100)
 	p.DecrementConnections("100.64.0.1")
 
 	if got := p.TotalConnections(); got != 2 {

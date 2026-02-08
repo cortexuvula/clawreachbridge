@@ -24,17 +24,19 @@ type Handler struct {
 	Proxy       *Proxy
 	RateLimiter *security.RateLimiter
 	Metrics     *metrics.Metrics // optional, nil if metrics disabled
+	ShutdownCtx context.Context  // cancelled on server shutdown
 
 	// mu protects Config during hot-reload
 	mu sync.RWMutex
 }
 
 // NewHandler creates a new proxy handler.
-func NewHandler(cfg *config.Config, p *Proxy, rl *security.RateLimiter) *Handler {
+func NewHandler(cfg *config.Config, p *Proxy, rl *security.RateLimiter, shutdownCtx context.Context) *Handler {
 	return &Handler{
 		Config:      cfg,
 		Proxy:       p,
 		RateLimiter: rl,
+		ShutdownCtx: shutdownCtx,
 	}
 }
 
@@ -62,20 +64,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 2. Optional auth token check (header first, query param fallback)
-	if cfg.Security.AuthToken != "" {
-		token := security.ExtractBearerToken(r.Header.Get("Authorization"))
-		if token == "" {
-			token = r.URL.Query().Get("token")
-		}
-		if !security.TokenMatch(token, cfg.Security.AuthToken) {
-			slog.Warn("rejected invalid auth token", "remote_addr", r.RemoteAddr)
-			http.Error(w, "Forbidden", http.StatusForbidden)
-			return
-		}
-	}
-
-	// 3. Rate limit check (strip port — RemoteAddr is "ip:port")
+	// 2. Parse client IP (needed for auth logging, rate limiting, and connection tracking)
 	clientIP, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		slog.Error("failed to parse remote address", "remote_addr", r.RemoteAddr, "error", err)
@@ -83,13 +72,30 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 3. Optional auth token check (header first, query param fallback)
+	if cfg.Security.AuthToken != "" {
+		token := security.ExtractBearerToken(r.Header.Get("Authorization"))
+		if token == "" {
+			token = r.URL.Query().Get("token")
+			if token != "" {
+				slog.Warn("auth token provided via query parameter; use Authorization header instead", "client_ip", clientIP)
+			}
+		}
+		if !security.TokenMatch(token, cfg.Security.AuthToken) {
+			slog.Warn("rejected invalid auth token", "client_ip", clientIP)
+			http.Error(w, "Forbidden", http.StatusForbidden)
+			return
+		}
+	}
+
+	// 4. Rate limit check
 	if cfg.Security.RateLimit.Enabled && h.RateLimiter != nil && !h.RateLimiter.Allow(clientIP) {
 		slog.Warn("rate limit exceeded", "client_ip", clientIP)
 		http.Error(w, "Too Many Requests", http.StatusTooManyRequests)
 		return
 	}
 
-	// 4. Connection limits (atomic check-and-increment to prevent TOCTOU race)
+	// 5. Connection limits (atomic check-and-increment to prevent TOCTOU race)
 	if reason := h.Proxy.TryIncrementConnections(clientIP, cfg.Security.MaxConnections, cfg.Security.MaxConnectionsPerIP); reason != "" {
 		if reason == "max_connections" {
 			slog.Warn("max connections reached", "current", h.Proxy.ConnectionCount(), "max", cfg.Security.MaxConnections)
@@ -105,9 +111,34 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.Metrics.ActiveConnections.Inc()
 	}
 
-	// 5. Accept client WebSocket connection
+	// 6. Accept client WebSocket connection
 	// Forward subprotocols from client request to Gateway
 	subprotocols := r.Header.Values("Sec-WebSocket-Protocol")
+
+	// Filter subprotocols if an allowlist is configured
+	if len(cfg.Bridge.AllowedSubprotocols) > 0 {
+		allowed := make(map[string]bool, len(cfg.Bridge.AllowedSubprotocols))
+		for _, sp := range cfg.Bridge.AllowedSubprotocols {
+			allowed[sp] = true
+		}
+		var filtered []string
+		for _, sp := range subprotocols {
+			if allowed[sp] {
+				filtered = append(filtered, sp)
+			}
+		}
+		if len(subprotocols) > 0 && len(filtered) == 0 {
+			h.Proxy.DecrementConnections(clientIP)
+			if h.Metrics != nil {
+				h.Metrics.ActiveConnections.Dec()
+				h.Metrics.ErrorsTotal.WithLabelValues("subprotocol_rejected").Inc()
+			}
+			slog.Warn("rejected connection: no allowed subprotocols", "client_ip", clientIP, "requested", subprotocols)
+			http.Error(w, "Forbidden", http.StatusForbidden)
+			return
+		}
+		subprotocols = filtered
+	}
 	clientConn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 		Subprotocols: subprotocols,
 	})
@@ -122,7 +153,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	clientConn.SetReadLimit(cfg.Bridge.MaxMessageSize)
 
-	// 6. Dial Gateway with Origin header and matching subprotocols
+	// 7. Dial Gateway with Origin header and matching subprotocols
 	dialCtx, dialCancel := context.WithTimeout(r.Context(), cfg.Bridge.DialTimeout)
 	defer dialCancel()
 
@@ -145,10 +176,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	slog.Info("connection established", "client_ip", clientIP, "gateway", gatewayURL)
 
-	// 7. Bidirectional forwarding with coordinated shutdown
+	// 8. Bidirectional forwarding with coordinated shutdown
 	// When either direction finishes, cancel context to tear down the other side.
 	// context.CancelFunc is safe to call multiple times.
-	proxyCtx, proxyCancel := context.WithCancel(context.Background())
+	proxyCtx, proxyCancel := context.WithCancel(h.ShutdownCtx)
 
 	// Start keepalive pings to detect dead connections.
 	// Ping must run concurrently with Reader per coder/websocket docs.
@@ -203,7 +234,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) forwardMessages(ctx context.Context, src, dst *websocket.Conn, direction string, msgLimiter *rate.Limiter) {
 	cfg := h.GetConfig()
 	for {
-		msgType, reader, err := src.Reader(ctx)
+		readCtx, readCancel := context.WithTimeout(ctx, cfg.Bridge.ReadTimeout)
+		msgType, reader, err := src.Reader(readCtx)
+		readCancel()
 		if err != nil {
 			slog.Debug("forward stopped", "direction", direction, "reason", err)
 			return

@@ -241,7 +241,12 @@ func detectTailscaleIP() string {
 
 // checkGateway performs a quick HTTP check against the gateway URL.
 func checkGateway(out io.Writer, gatewayURL string) {
-	client := &http.Client{Timeout: 3 * time.Second}
+	client := &http.Client{
+		Timeout: 3 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
 	resp, err := client.Get(gatewayURL)
 	if err != nil {
 		fmt.Fprintf(out, "  WARNING: Gateway at %s is not reachable: %v\n", gatewayURL, err)

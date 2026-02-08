@@ -68,17 +68,19 @@ download_binary() {
     info "Downloading ${BINARY}..."
     if command -v curl &>/dev/null; then
         curl -fsSL -o "${tmp_dir}/${BINARY}" "${url}"
-        curl -fsSL -o "${tmp_dir}/checksums.txt" "${checksum_url}" 2>/dev/null || true
+        curl -fsSL -o "${tmp_dir}/checksums.txt" "${checksum_url}" 2>/dev/null || warn "Checksum file not available — skipping verification"
     else
         wget -q -O "${tmp_dir}/${BINARY}" "${url}"
-        wget -q -O "${tmp_dir}/checksums.txt" "${checksum_url}" 2>/dev/null || true
+        wget -q -O "${tmp_dir}/checksums.txt" "${checksum_url}" 2>/dev/null || warn "Checksum file not available — skipping verification"
     fi
 
     # Verify checksum if available
     if [ -f "${tmp_dir}/checksums.txt" ] && command -v sha256sum &>/dev/null; then
         info "Verifying checksum..."
-        (cd "${tmp_dir}" && grep "${BINARY}" checksums.txt | sha256sum -c --quiet) || die "Checksum verification failed"
+        (cd "${tmp_dir}" && grep -F "${BINARY}" checksums.txt | sha256sum -c --quiet) || die "Checksum verification failed"
         info "Checksum verified"
+    else
+        warn "Checksum verification skipped (checksums.txt not found or sha256sum not available)"
     fi
 
     # Install binary
