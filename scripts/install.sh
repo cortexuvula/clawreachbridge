@@ -132,6 +132,26 @@ install_systemd() {
     info "systemd service installed and enabled"
 }
 
+# Restart service if it was running before upgrade
+restart_if_running() {
+    if [ "${WAS_RUNNING}" != "true" ]; then
+        return
+    fi
+
+    info "Restarting service..."
+    if sudo systemctl restart clawreachbridge; then
+        # Brief wait then verify
+        sleep 2
+        if systemctl is-active --quiet clawreachbridge 2>/dev/null; then
+            info "Service restarted successfully"
+        else
+            warn "Service failed to restart — check: sudo journalctl -u clawreachbridge -n 20"
+        fi
+    else
+        warn "Failed to restart service — check: sudo journalctl -u clawreachbridge -n 20"
+    fi
+}
+
 # Main
 main() {
     # Parse flags
@@ -149,25 +169,37 @@ main() {
 
     detect_platform
 
+    # Check if service is already running (upgrade scenario)
+    WAS_RUNNING=false
+    if command -v systemctl &>/dev/null && systemctl is-active --quiet clawreachbridge 2>/dev/null; then
+        WAS_RUNNING=true
+        info "Existing service detected (running)"
+    fi
+
     if [ "${1:-}" = "--non-interactive" ]; then
         get_latest_version
         download_binary
         setup_config
         install_systemd
+        restart_if_running
     else
         get_latest_version
         download_binary
         setup_config
         install_systemd
+        restart_if_running
 
         echo ""
         info "Installation complete!"
         "${INSTALL_DIR}/${BINARY_NAME}" version
-        echo ""
-        echo "Next step:"
-        echo "  sudo ${BINARY_NAME} setup"
-        echo ""
-        echo "The setup wizard will create your config, and start the service."
+
+        if [ "${WAS_RUNNING}" != "true" ]; then
+            echo ""
+            echo "Next step:"
+            echo "  sudo ${BINARY_NAME} setup"
+            echo ""
+            echo "The setup wizard will create your config, and start the service."
+        fi
     fi
 }
 
