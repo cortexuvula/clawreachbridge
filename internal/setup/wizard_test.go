@@ -444,3 +444,18 @@ func TestRunWizard_GatewayURLValidation(t *testing.T) {
 		t.Error("wizard should warn about invalid gateway URL format")
 	}
 }
+
+func TestPromptPort_InvalidThenEOF(t *testing.T) {
+	// Reader provides one invalid port then EOF — should return the default
+	in := strings.NewReader("abc\n")
+	scanner := bufio.NewScanner(in)
+	var out bytes.Buffer
+
+	result := promptPort(scanner, &out, "Port: ", "8080")
+	if result != "8080" {
+		t.Errorf("promptPort() = %q, want default %q on EOF after invalid input", result, "8080")
+	}
+	if !strings.Contains(out.String(), "Invalid port") {
+		t.Error("promptPort should warn about invalid port before falling back to default")
+	}
+}

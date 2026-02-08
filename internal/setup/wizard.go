@@ -296,13 +296,18 @@ func startSystemdService(out io.Writer) error {
 	return nil
 }
 
+// yamlEscapeString escapes a string for use inside YAML double quotes.
+func yamlEscapeString(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `"`, `\"`)
+	return s
+}
+
 // generateConfig creates a commented YAML config string.
 func generateConfig(listenAddress, gatewayURL, origin, healthAddress, authToken string) string {
 	authTokenLine := `  auth_token: ""`
 	if authToken != "" {
-		escaped := strings.ReplaceAll(authToken, `\`, `\\`)
-		escaped = strings.ReplaceAll(escaped, `"`, `\"`)
-		authTokenLine = fmt.Sprintf(`  auth_token: "%s"`, escaped)
+		authTokenLine = fmt.Sprintf(`  auth_token: "%s"`, yamlEscapeString(authToken))
 	}
 
 	return fmt.Sprintf(`# ClawReach Bridge Configuration
@@ -361,7 +366,7 @@ health:
 monitoring:
   metrics_enabled: false
   metrics_endpoint: "/metrics"
-`, listenAddress, gatewayURL, origin, authTokenLine, healthAddress)
+`, yamlEscapeString(listenAddress), yamlEscapeString(gatewayURL), yamlEscapeString(origin), authTokenLine, yamlEscapeString(healthAddress))
 }
 
 // writeConfig writes the config file, creating parent directories as needed.
@@ -390,8 +395,16 @@ func writeConfig(path, content string, setOwnership bool, out io.Writer) error {
 			if err != nil {
 				fmt.Fprintf(out, "  WARNING: Could not look up group clawreachbridge: %v\n", err)
 			} else {
-				uid, _ := strconv.Atoi(u.Uid)
-				gid, _ := strconv.Atoi(g.Gid)
+				uid, err := strconv.Atoi(u.Uid)
+				if err != nil {
+					fmt.Fprintf(out, "  WARNING: Could not parse UID %q for user clawreachbridge: %v\n", u.Uid, err)
+					return nil
+				}
+				gid, err := strconv.Atoi(g.Gid)
+				if err != nil {
+					fmt.Fprintf(out, "  WARNING: Could not parse GID %q for group clawreachbridge: %v\n", g.Gid, err)
+					return nil
+				}
 				if err := os.Chown(path, uid, gid); err != nil {
 					fmt.Fprintf(out, "  WARNING: Could not set ownership to clawreachbridge:clawreachbridge: %v\n", err)
 				}
