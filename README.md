@@ -14,6 +14,7 @@ ClawReach Bridge acts as a trusted proxy between ClawReach clients and OpenClaw 
 - **Compatibility**: Injects proper Origin headers that Gateway requires
 - **Zero Gateway changes**: Works with unmodified OpenClaw
 - **Encrypted**: Tailscale provides end-to-end encryption
+- **Graceful shutdown**: Two-phase drain sends WebSocket close frames before terminating
 - **Web Admin UI**: Built-in browser dashboard for monitoring and control
 
 ## Quick Start
@@ -45,6 +46,21 @@ ClawReach Bridge (this project)
         ↓ (localhost, proper headers)
 OpenClaw Gateway (unmodified)
 ```
+
+## Connection Stability
+
+ClawReach Bridge is designed for long-lived WebSocket connections with clean lifecycle management:
+
+- **Graceful close frames**: Clients receive proper WebSocket close frames with status codes and reasons instead of raw TCP resets. This lets client-side reconnection logic distinguish between intentional shutdowns and network failures.
+- **Two-phase shutdown**: On SIGTERM/SIGINT, the bridge stops accepting new connections, sends `StatusGoingAway` ("server shutting down") close frames to all active clients, waits for connections to drain (up to `drain_timeout`), then force-closes any remaining.
+- **Keepalive pings**: Periodic WebSocket pings detect dead connections. Failed pings send a close frame with "keepalive timeout" before teardown.
+- **Tunable timeouts**: `write_timeout` (default 30s) accommodates slow consumers; `ping_interval` and `pong_timeout` are independently configurable.
+
+| Scenario | Close Code | Reason |
+|---|---|---|
+| Gateway unreachable | 1014 (Bad Gateway) | `gateway unreachable` |
+| Keepalive failure | 1001 (Going Away) | `keepalive timeout` |
+| Server shutdown | 1001 (Going Away) | `server shutting down` |
 
 ## Web Admin UI
 
@@ -92,6 +108,23 @@ The web UI is powered by a JSON API available at `/api/v1/` on the health listen
 | GET | `/api/v1/logs?limit=100&level=info&since=<RFC3339>` | Recent log entries from ring buffer |
 | POST | `/api/v1/reload` | Reload config from disk |
 | POST | `/api/v1/restart` | Restart service via systemd |
+
+## Configuration
+
+Key settings in `/etc/clawreachbridge/config.yaml` (see [`configs/config.example.yaml`](./configs/config.example.yaml) for all options):
+
+| Setting | Default | Description |
+|---|---|---|
+| `bridge.listen_address` | `100.64.0.1:8080` | Tailscale IP + port to bind |
+| `bridge.gateway_url` | `http://localhost:18800` | OpenClaw Gateway upstream |
+| `bridge.drain_timeout` | `30s` | Max wait for connections to close on shutdown |
+| `bridge.write_timeout` | `30s` | Deadline for writing a single message |
+| `bridge.ping_interval` | `30s` | WebSocket ping frequency for dead peer detection |
+| `bridge.pong_timeout` | `10s` | Max wait for pong response |
+| `security.max_connections` | `1000` | Global connection limit |
+| `security.max_connections_per_ip` | `10` | Per-IP connection limit |
+
+All settings support environment variable overrides with the `CLAWREACH_` prefix (e.g. `CLAWREACH_BRIDGE_WRITE_TIMEOUT=60s`).
 
 ## Documentation
 
