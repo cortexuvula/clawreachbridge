@@ -154,7 +154,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	clientConn.SetReadLimit(cfg.Bridge.MaxMessageSize)
 
 	// 7. Dial Gateway with Origin header and matching subprotocols
-	dialCtx, dialCancel := context.WithTimeout(r.Context(), cfg.Bridge.DialTimeout)
+	// Use ShutdownCtx (not r.Context()) as the parent: when ServeHTTP returns,
+	// r.Context() is cancelled, which races with the HTTP transport's background
+	// goroutine and can close the underlying TCP connection before forwarding starts.
+	dialCtx, dialCancel := context.WithTimeout(h.ShutdownCtx, cfg.Bridge.DialTimeout)
 	defer dialCancel()
 
 	gatewayURL := httpToWS(cfg.Bridge.GatewayURL)
@@ -234,9 +237,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) forwardMessages(ctx context.Context, src, dst *websocket.Conn, direction string, msgLimiter *rate.Limiter) {
 	cfg := h.GetConfig()
 	for {
-		readCtx, readCancel := context.WithTimeout(ctx, cfg.Bridge.ReadTimeout)
-		msgType, reader, err := src.Reader(readCtx)
-		readCancel()
+		// Wait for the next message using only the proxy context (no timeout).
+		// Keepalive pings detect dead connections and cancel ctx via proxyCancel.
+		// A ReadTimeout here would kill idle-but-alive long-lived connections.
+		msgType, reader, err := src.Reader(ctx)
 		if err != nil {
 			slog.Debug("forward stopped", "direction", direction, "reason", err)
 			return

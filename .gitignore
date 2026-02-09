@@ -29,6 +29,7 @@ bin/
 config.yaml
 config.yml
 *.local.yaml
+*.dev.yaml
 dev-*.yaml
 
 # Logs
