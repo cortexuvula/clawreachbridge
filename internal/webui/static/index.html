@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -7,18 +7,28 @@
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
+    <div id="toast-container"></div>
+
     <header>
         <h1>ClawReach Bridge</h1>
         <span id="version" class="version"></span>
+        <div class="header-right">
+            <span id="conn-indicator" class="conn-dot conn-online" title="Checking..."></span>
+            <button id="theme-toggle" title="Toggle theme">&#9790;</button>
+        </div>
     </header>
 
     <nav>
         <button class="tab active" data-tab="dashboard">Dashboard</button>
-        <button class="tab" data-tab="connections">Connections</button>
+        <button class="tab" data-tab="connections">Connections <span id="conn-tab-badge" class="tab-badge" style="display:none"></span></button>
         <button class="tab" data-tab="config">Config</button>
         <button class="tab" data-tab="logs">Logs</button>
         <button class="tab" data-tab="controls">Controls</button>
     </nav>
+
+    <div id="reconnect-banner" style="display:none">
+        API unreachable &mdash; reconnecting... (attempt <span id="reconnect-count">0</span>)
+    </div>
 
     <main>
         <!-- Dashboard Tab -->
@@ -32,25 +42,30 @@
                     <div class="card-label">Uptime</div>
                     <div class="card-value" id="uptime">--</div>
                 </div>
-                <div class="card">
+                <div class="card" data-spark-color="var(--primary)">
                     <div class="card-label">Active Connections</div>
                     <div class="card-value" id="active-conns">--</div>
+                    <div class="card-sparkline" id="spark-active-conns"></div>
                 </div>
-                <div class="card">
+                <div class="card" data-spark-color="var(--green)">
                     <div class="card-label">Total Connections</div>
                     <div class="card-value" id="total-conns">--</div>
+                    <div class="card-sparkline" id="spark-total-conns"></div>
                 </div>
-                <div class="card">
+                <div class="card" data-spark-color="var(--yellow)">
                     <div class="card-label">Total Messages</div>
                     <div class="card-value" id="total-msgs">--</div>
+                    <div class="card-sparkline" id="spark-total-msgs"></div>
                 </div>
-                <div class="card">
+                <div class="card" data-spark-color="var(--orange)">
                     <div class="card-label">Memory</div>
                     <div class="card-value" id="memory">--</div>
+                    <div class="card-sparkline" id="spark-memory"></div>
                 </div>
-                <div class="card">
+                <div class="card" data-spark-color="var(--purple)">
                     <div class="card-label">Goroutines</div>
                     <div class="card-value" id="goroutines">--</div>
+                    <div class="card-sparkline" id="spark-goroutines"></div>
                 </div>
                 <div class="card">
                     <div class="card-label">Build</div>
@@ -114,7 +129,6 @@
                     <input type="number" id="cfg-msgs-sec" name="messages_per_second" min="1">
                 </div>
                 <button type="submit" class="btn btn-primary">Apply Changes</button>
-                <span id="config-status" class="status-msg"></span>
             </form>
 
             <h3>Read-Only Settings</h3>
@@ -135,6 +149,9 @@
                 <label>Limit:
                     <input type="number" id="log-limit" value="100" min="1" max="1000">
                 </label>
+                <label>Search:
+                    <input type="text" id="log-search" placeholder="Filter...">
+                </label>
                 <label>
                     <input type="checkbox" id="log-auto-refresh" checked> Auto-refresh
                 </label>
@@ -148,13 +165,11 @@
                 <h3>Service Controls</h3>
                 <p>Reload configuration from disk (same as <code>kill -HUP</code>):</p>
                 <button id="btn-reload" class="btn btn-primary">Reload Config</button>
-                <span id="reload-status" class="status-msg"></span>
             </div>
             <div class="control-group danger-zone">
                 <h3>Danger Zone</h3>
                 <p>Restart the service (triggers <code>os.Exit(1)</code>, systemd restarts):</p>
                 <button id="btn-restart" class="btn btn-danger">Restart Service</button>
-                <span id="restart-status" class="status-msg"></span>
             </div>
         </section>
     </main>
