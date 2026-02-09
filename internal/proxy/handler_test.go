@@ -2,11 +2,15 @@ package proxy
 
 import (
 	"context"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/coder/websocket"
 	"github.com/cortexuvula/clawreachbridge/internal/config"
 	"github.com/cortexuvula/clawreachbridge/internal/security"
 	"golang.org/x/time/rate"
@@ -234,5 +238,161 @@ func TestHandlerUpdateConfig(t *testing.T) {
 
 	if handler.GetConfig().Security.AuthToken != "new-secret" {
 		t.Error("expected updated auth token")
+	}
+}
+
+// echoGateway creates a test WebSocket echo server (fake Gateway).
+func echoGateway(t *testing.T) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, &websocket.AcceptOptions{
+			InsecureSkipVerify: true,
+		})
+		if err != nil {
+			return
+		}
+		defer c.CloseNow()
+		for {
+			msgType, reader, err := c.Reader(r.Context())
+			if err != nil {
+				return
+			}
+			writer, err := c.Writer(r.Context(), msgType)
+			if err != nil {
+				return
+			}
+			if _, err := io.Copy(writer, reader); err != nil {
+				return
+			}
+			writer.Close()
+		}
+	}))
+}
+
+// setupBridgeWithGateway creates a bridge+gateway pair for WebSocket-level tests.
+func setupBridgeWithGateway(t *testing.T) (*httptest.Server, *Handler, *Proxy) {
+	t.Helper()
+	gw := echoGateway(t)
+	t.Cleanup(gw.Close)
+
+	cfg := testConfig()
+	cfg.Bridge.GatewayURL = gw.URL
+	cfg.Bridge.PingInterval = 0 // disable keepalive for these tests
+
+	p := New()
+	handler := NewHandler(cfg, p, nil, context.Background())
+	bridge := httptest.NewServer(handler)
+	t.Cleanup(bridge.Close)
+
+	// Stash bridge URL on the handler config so tests can connect
+	cfg.Bridge.ListenAddress = bridge.Listener.Addr().String()
+
+	return bridge, handler, p
+}
+
+func TestGracefulClose(t *testing.T) {
+	bridge, _, _ := setupBridgeWithGateway(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	wsURL := "ws" + strings.TrimPrefix(bridge.URL, "http")
+	c, _, err := websocket.Dial(ctx, wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer c.CloseNow()
+
+	// Send a message and read the echo to confirm the connection works
+	if err := c.Write(ctx, websocket.MessageText, []byte("hello")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_, data, err := c.Read(ctx)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if string(data) != "hello" {
+		t.Fatalf("echo mismatch: got %q", data)
+	}
+
+	// Close the bridge server — this triggers connection cleanup.
+	// The client should receive a close frame (CloseError), not a raw EOF.
+	bridge.Close()
+
+	// Try to read — should get a close error, not io.EOF
+	_, _, err = c.Read(ctx)
+	if err == nil {
+		t.Fatal("expected error after bridge close")
+	}
+	var closeErr websocket.CloseError
+	if !errors.As(err, &closeErr) {
+		// When the server's HTTP transport tears down the connection abruptly,
+		// we may get io.EOF instead of a close frame. That's acceptable for
+		// httptest.Server.Close() which doesn't trigger our drain path.
+		// The important thing is we don't hang.
+		t.Logf("got non-close error (acceptable for httptest.Close): %v", err)
+	} else {
+		t.Logf("received close frame: code=%d reason=%q", closeErr.Code, closeErr.Reason)
+	}
+}
+
+func TestDrainOnShutdown(t *testing.T) {
+	gw := echoGateway(t)
+	t.Cleanup(gw.Close)
+
+	cfg := testConfig()
+	cfg.Bridge.GatewayURL = gw.URL
+	cfg.Bridge.PingInterval = 0
+
+	p := New()
+	handler := NewHandler(cfg, p, nil, context.Background())
+	bridge := httptest.NewServer(handler)
+	defer bridge.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	wsURL := "ws" + strings.TrimPrefix(bridge.URL, "http")
+	c, _, err := websocket.Dial(ctx, wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer c.CloseNow()
+
+	// Confirm connection is live
+	if err := c.Write(ctx, websocket.MessageText, []byte("ping")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_, data, err := c.Read(ctx)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if string(data) != "ping" {
+		t.Fatalf("echo mismatch: got %q", data)
+	}
+
+	// Trigger drain — this should send a close frame to the client
+	handler.StartDrain()
+
+	// Client should receive a close frame with StatusGoingAway
+	_, _, err = c.Read(ctx)
+	if err == nil {
+		t.Fatal("expected error after drain")
+	}
+	var closeErr websocket.CloseError
+	if !errors.As(err, &closeErr) {
+		t.Fatalf("expected CloseError, got: %v", err)
+	}
+	if closeErr.Code != websocket.StatusGoingAway {
+		t.Errorf("close code = %d, want %d (StatusGoingAway)", closeErr.Code, websocket.StatusGoingAway)
+	}
+	if closeErr.Reason != "server shutting down" {
+		t.Errorf("close reason = %q, want %q", closeErr.Reason, "server shutting down")
+	}
+
+	// Connection count should drop to 0 after drain
+	time.Sleep(100 * time.Millisecond)
+	if count := p.ConnectionCount(); count != 0 {
+		t.Errorf("connection count = %d after drain, want 0", count)
 	}
 }

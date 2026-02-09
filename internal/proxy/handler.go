@@ -26,18 +26,32 @@ type Handler struct {
 	Metrics     *metrics.Metrics // optional, nil if metrics disabled
 	ShutdownCtx context.Context  // cancelled on server shutdown
 
+	// drainCtx is cancelled when the server begins draining connections.
+	// Active connections watch this to send graceful close frames.
+	drainCtx    context.Context
+	drainCancel context.CancelFunc
+
 	// mu protects Config during hot-reload
 	mu sync.RWMutex
 }
 
 // NewHandler creates a new proxy handler.
 func NewHandler(cfg *config.Config, p *Proxy, rl *security.RateLimiter, shutdownCtx context.Context) *Handler {
+	drainCtx, drainCancel := context.WithCancel(context.Background())
 	return &Handler{
 		Config:      cfg,
 		Proxy:       p,
 		RateLimiter: rl,
 		ShutdownCtx: shutdownCtx,
+		drainCtx:    drainCtx,
+		drainCancel: drainCancel,
 	}
+}
+
+// StartDrain signals all active connections to begin graceful shutdown.
+// Each connection's drain watcher will send a WebSocket close frame.
+func (h *Handler) StartDrain() {
+	h.drainCancel()
 }
 
 // GetConfig returns the current config (thread-safe for hot-reload).
@@ -191,11 +205,26 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		go h.keepAlive(proxyCtx, gatewayConn, cfg.Bridge.PingInterval, cfg.Bridge.PongTimeout, proxyCancel)
 	}
 
-	// Guard CloseNow with sync.Once — context cancellation can trigger
+	// Guard close calls with sync.Once — context cancellation can trigger
 	// internal closes in coder/websocket concurrently with our cleanup.
+	// Client gets a graceful Close (sends close frame); gateway uses CloseNow.
 	var closeClientOnce, closeGatewayOnce sync.Once
-	closeClient := func() { closeClientOnce.Do(func() { clientConn.CloseNow() }) }
+	closeClient := func(code websocket.StatusCode, reason string) {
+		closeClientOnce.Do(func() { clientConn.Close(code, reason) })
+	}
 	closeGateway := func() { closeGatewayOnce.Do(func() { gatewayConn.CloseNow() }) }
+
+	// Drain watcher: when the server starts draining, send a graceful close
+	// frame to the client. This causes Reader() in the forwarding goroutines
+	// to return, triggering normal connection teardown.
+	go func() {
+		select {
+		case <-h.drainCtx.Done():
+			closeClient(websocket.StatusGoingAway, "server shutting down")
+		case <-proxyCtx.Done():
+			// Connection already closing for another reason
+		}
+	}()
 
 	// Per-connection message rate limiter (client→gateway only)
 	var msgLimiter *rate.Limiter
@@ -220,7 +249,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		start := time.Now()
 		wg.Wait()
-		closeClient()
+		closeClient(websocket.StatusGoingAway, "")
 		closeGateway()
 		h.Proxy.DecrementConnections(clientIP)
 		if h.Metrics != nil {
@@ -285,8 +314,8 @@ func (h *Handler) forwardMessages(ctx context.Context, src, dst *websocket.Conn,
 }
 
 // keepAlive sends periodic WebSocket pings to detect dead connections.
-// If a ping fails or times out, it cancels the proxy context to tear down both sides.
-func (h *Handler) keepAlive(ctx context.Context, conn *websocket.Conn, interval, pongTimeout time.Duration, cancel context.CancelFunc) {
+// If a ping fails or times out, it sends a close frame and cancels the proxy context.
+func (h *Handler) keepAlive(ctx context.Context, conn *websocket.Conn, interval, pongTimeout time.Duration, onFail context.CancelFunc) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -299,7 +328,8 @@ func (h *Handler) keepAlive(ctx context.Context, conn *websocket.Conn, interval,
 			pingCancel()
 			if err != nil {
 				slog.Debug("keepalive ping failed, closing connection", "error", err)
-				cancel()
+				conn.Close(websocket.StatusGoingAway, "keepalive timeout")
+				onFail()
 				return
 			}
 		}

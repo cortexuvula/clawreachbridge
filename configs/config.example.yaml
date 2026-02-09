@@ -25,7 +25,8 @@ bridge:
   max_message_size: 1048576  # 1MB max WebSocket message size
   ping_interval: "30s"       # send ping frames to detect dead peers
   pong_timeout: "10s"        # close connection if pong not received within this window
-  write_timeout: "10s"       # deadline for writing a single message
+  write_timeout: "30s"       # deadline for writing a single message (increase for slow consumers)
+  read_timeout: "60s"        # unused by proxy loop; keepalive pings handle dead connection detection
   dial_timeout: "10s"        # timeout for dialing upstream Gateway
 
   # TLS settings (optional, usually not needed with Tailscale)

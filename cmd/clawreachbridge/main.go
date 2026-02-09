@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"sync"
 	"syscall"
 	"time"
 
@@ -353,31 +352,45 @@ func runBridge(configPath string, verbose bool) error {
 				"drain_timeout", cfg.Bridge.DrainTimeout.String(),
 			)
 
-			// Cancel proxy connections so they drain
-			shutdownCancel()
-
-			// Stop watchdog
+			// Stop watchdog and notify systemd
 			watchdogCancel()
 			daemon.SdNotify(false, daemon.SdNotifyStopping)
 
-			// Stop accepting new connections
-			ctx, cancel := context.WithTimeout(context.Background(), cfg.Bridge.DrainTimeout)
-			defer cancel()
+			// Phase 1: Stop accepting new connections + drain active ones
+			proxyServer.Close() // immediately close listener
 
-			var wg sync.WaitGroup
-			if healthServer != nil {
-				wg.Add(1)
-				go func() {
-					defer wg.Done()
-					healthServer.Shutdown(ctx)
-				}()
+			handler.StartDrain() // send close frames to all active connections
+
+			// Wait for active connections to finish (up to drain timeout)
+			drainDeadline := time.After(cfg.Bridge.DrainTimeout)
+			drainTick := time.NewTicker(100 * time.Millisecond)
+		drainLoop:
+			for {
+				select {
+				case <-drainDeadline:
+					remaining := p.ConnectionCount()
+					if remaining > 0 {
+						slog.Warn("drain timeout reached, force-closing remaining connections", "remaining", remaining)
+					}
+					break drainLoop
+				case <-drainTick.C:
+					if p.ConnectionCount() == 0 {
+						slog.Info("all connections drained")
+						break drainLoop
+					}
+				}
 			}
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				proxyServer.Shutdown(ctx)
-			}()
-			wg.Wait()
+			drainTick.Stop()
+
+			// Phase 2: Force-close anything remaining
+			shutdownCancel()
+
+			// Shutdown health server
+			if healthServer != nil {
+				shutdownCtx, shutdownCtxCancel := context.WithTimeout(context.Background(), 5*time.Second)
+				healthServer.Shutdown(shutdownCtx)
+				shutdownCtxCancel()
+			}
 
 			slog.Info("shutdown complete")
 			return nil

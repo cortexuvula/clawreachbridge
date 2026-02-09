@@ -96,7 +96,7 @@ func DefaultConfig() *Config {
 			MaxMessageSize: 262144, // 256KB
 			PingInterval:   30 * time.Second,
 			PongTimeout:    10 * time.Second,
-			WriteTimeout:   10 * time.Second,
+			WriteTimeout:   30 * time.Second,
 			ReadTimeout:    60 * time.Second,
 			DialTimeout:    10 * time.Second,
 		},
