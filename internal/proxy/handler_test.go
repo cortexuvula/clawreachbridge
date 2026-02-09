@@ -173,6 +173,8 @@ func TestHandlerRejectMaxConnections(t *testing.T) {
 
 	req := httptest.NewRequest("GET", "/", nil)
 	req.RemoteAddr = "127.0.0.1:12345"
+	req.Header.Set("Connection", "Upgrade")
+	req.Header.Set("Upgrade", "websocket")
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)
@@ -195,6 +197,8 @@ func TestHandlerRejectMaxConnectionsPerIP(t *testing.T) {
 
 	req := httptest.NewRequest("GET", "/", nil)
 	req.RemoteAddr = "127.0.0.1:12345"
+	req.Header.Set("Connection", "Upgrade")
+	req.Header.Set("Upgrade", "websocket")
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)
@@ -333,6 +337,117 @@ func TestGracefulClose(t *testing.T) {
 		t.Logf("got non-close error (acceptable for httptest.Close): %v", err)
 	} else {
 		t.Logf("received close frame: code=%d reason=%q", closeErr.Code, closeErr.Reason)
+	}
+}
+
+func TestHandlerHTTPProxy(t *testing.T) {
+	// Start a fake gateway HTTP server that returns known content.
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		w.Write([]byte("<html>A2UI Canvas</html>"))
+	}))
+	defer gateway.Close()
+
+	cfg := testConfig()
+	cfg.Bridge.GatewayURL = gateway.URL
+
+	handler := NewHandler(cfg, New(), nil, context.Background())
+
+	req := httptest.NewRequest("GET", "/", nil)
+	req.RemoteAddr = "127.0.0.1:12345"
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	body := rec.Body.String()
+	if body != "<html>A2UI Canvas</html>" {
+		t.Errorf("body = %q, want %q", body, "<html>A2UI Canvas</html>")
+	}
+}
+
+func TestHandlerHTTPProxyPreservesPath(t *testing.T) {
+	var receivedPath, receivedQuery string
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedPath = r.URL.Path
+		receivedQuery = r.URL.RawQuery
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer gateway.Close()
+
+	cfg := testConfig()
+	cfg.Bridge.GatewayURL = gateway.URL
+
+	handler := NewHandler(cfg, New(), nil, context.Background())
+
+	req := httptest.NewRequest("GET", "/__openclaw__/a2ui/?platform=android", nil)
+	req.RemoteAddr = "127.0.0.1:12345"
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if receivedPath != "/__openclaw__/a2ui/" {
+		t.Errorf("path = %q, want %q", receivedPath, "/__openclaw__/a2ui/")
+	}
+	if receivedQuery != "platform=android" {
+		t.Errorf("query = %q, want %q", receivedQuery, "platform=android")
+	}
+}
+
+func TestHandlerHTTPProxyRejectNonTailscale(t *testing.T) {
+	cfg := testConfig()
+	cfg.Security.TailscaleOnly = true
+
+	handler := NewHandler(cfg, New(), nil, context.Background())
+
+	req := httptest.NewRequest("GET", "/page", nil)
+	req.RemoteAddr = "192.168.1.1:12345"
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusForbidden)
+	}
+}
+
+func TestHandlerHTTPProxyRejectBadAuth(t *testing.T) {
+	cfg := testConfig()
+	cfg.Security.AuthToken = "secret-token"
+
+	handler := NewHandler(cfg, New(), nil, context.Background())
+
+	req := httptest.NewRequest("GET", "/page", nil)
+	req.RemoteAddr = "127.0.0.1:12345"
+	req.Header.Set("Authorization", "Bearer wrong-token")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusForbidden)
+	}
+}
+
+func TestHandlerHTTPProxyGatewayDown(t *testing.T) {
+	cfg := testConfig()
+	cfg.Bridge.GatewayURL = "http://127.0.0.1:19999" // nothing listening
+
+	handler := NewHandler(cfg, New(), nil, context.Background())
+
+	req := httptest.NewRequest("GET", "/page", nil)
+	req.RemoteAddr = "127.0.0.1:12345"
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadGateway {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusBadGateway)
 	}
 }
 

@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -26,6 +28,9 @@ type Handler struct {
 	Metrics     *metrics.Metrics // optional, nil if metrics disabled
 	ShutdownCtx context.Context  // cancelled on server shutdown
 
+	// httpProxy forwards non-WebSocket requests to the gateway.
+	httpProxy *httputil.ReverseProxy
+
 	// drainCtx is cancelled when the server begins draining connections.
 	// Active connections watch this to send graceful close frames.
 	drainCtx    context.Context
@@ -38,11 +43,26 @@ type Handler struct {
 // NewHandler creates a new proxy handler.
 func NewHandler(cfg *config.Config, p *Proxy, rl *security.RateLimiter, shutdownCtx context.Context) *Handler {
 	drainCtx, drainCancel := context.WithCancel(context.Background())
+
+	gatewayURL, _ := url.Parse(cfg.Bridge.GatewayURL)
+	httpProxy := &httputil.ReverseProxy{
+		Director: func(req *http.Request) {
+			req.URL.Scheme = gatewayURL.Scheme
+			req.URL.Host = gatewayURL.Host
+			req.Host = gatewayURL.Host
+		},
+		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			slog.Error("HTTP proxy error", "url", r.URL.Path, "error", err)
+			http.Error(w, "Bad Gateway", http.StatusBadGateway)
+		},
+	}
+
 	return &Handler{
 		Config:      cfg,
 		Proxy:       p,
 		RateLimiter: rl,
 		ShutdownCtx: shutdownCtx,
+		httpProxy:   httpProxy,
 		drainCtx:    drainCtx,
 		drainCancel: drainCancel,
 	}
@@ -106,6 +126,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if cfg.Security.RateLimit.Enabled && h.RateLimiter != nil && !h.RateLimiter.Allow(clientIP) {
 		slog.Warn("rate limit exceeded", "client_ip", clientIP)
 		http.Error(w, "Too Many Requests", http.StatusTooManyRequests)
+		return
+	}
+
+	// Route: plain HTTP requests go through the reverse proxy to the gateway.
+	// WebSocket upgrades continue through the WebSocket-specific path below.
+	if !isWebSocketUpgrade(r) {
+		slog.Debug("proxying HTTP request", "client_ip", clientIP, "method", r.Method, "path", r.URL.Path)
+		h.httpProxy.ServeHTTP(w, r)
 		return
 	}
 
@@ -334,6 +362,25 @@ func (h *Handler) keepAlive(ctx context.Context, conn *websocket.Conn, interval,
 			}
 		}
 	}
+}
+
+// isWebSocketUpgrade returns true if the request is a WebSocket upgrade per RFC 6455 §4.1.
+func isWebSocketUpgrade(r *http.Request) bool {
+	return strings.EqualFold(r.Header.Get("Upgrade"), "websocket") &&
+		headerContains(r.Header, "Connection", "upgrade")
+}
+
+// headerContains checks whether the header key contains the given value
+// as a comma-separated token (case-insensitive).
+func headerContains(h http.Header, key, value string) bool {
+	for _, v := range h[http.CanonicalHeaderKey(key)] {
+		for _, s := range strings.Split(v, ",") {
+			if strings.EqualFold(strings.TrimSpace(s), value) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // httpToWS converts http:// to ws:// and https:// to wss://.
