@@ -58,7 +58,7 @@ func TestPrompt_EOF(t *testing.T) {
 }
 
 func TestGenerateConfig(t *testing.T) {
-	content := generateConfig("100.64.1.1:8080", "http://localhost:18800", "https://gateway.local", "127.0.0.1:8081", "")
+	content := generateConfig("100.64.1.1:8080", "http://localhost:18800", "https://gateway.local", "127.0.0.1:8081", "", "")
 	if !strings.Contains(content, `listen_address: "100.64.1.1:8080"`) {
 		t.Error("config should contain listen_address")
 	}
@@ -74,7 +74,7 @@ func TestGenerateConfig(t *testing.T) {
 }
 
 func TestGenerateConfig_WithAuthToken(t *testing.T) {
-	content := generateConfig("100.64.1.1:8080", "http://localhost:18800", "https://gateway.local", "127.0.0.1:8081", "mysecret")
+	content := generateConfig("100.64.1.1:8080", "http://localhost:18800", "https://gateway.local", "127.0.0.1:8081", "mysecret", "")
 	if !strings.Contains(content, `auth_token: "mysecret"`) {
 		t.Error("config should contain the auth token")
 	}
@@ -110,12 +110,13 @@ func TestRunWizard_AllDefaults_WithTailscale(t *testing.T) {
 	configPath := filepath.Join(dir, "config.yaml")
 
 	// When Tailscale is detected, wizard skips the manual IP prompt.
-	// Prompts: gateway URL, listen port, health port, auth token
+	// Prompts: gateway URL, listen port, health port, auth token, media dir
 	input := strings.Join([]string{
 		"", // gateway URL (accept default)
 		"", // listen port (accept default)
 		"", // health port (accept default)
 		"", // auth token (none)
+		"", // media dir (disabled)
 	}, "\n") + "\n"
 
 	var out bytes.Buffer
@@ -146,13 +147,14 @@ func TestRunWizard_NoTailscale_ManualIP(t *testing.T) {
 	configPath := filepath.Join(dir, "config.yaml")
 
 	// When Tailscale is NOT detected, wizard prompts for IP manually.
-	// Prompts: gateway URL, listen port, tailscale IP, health port, auth token
+	// Prompts: gateway URL, listen port, tailscale IP, health port, auth token, media dir
 	input := strings.Join([]string{
 		"",           // gateway URL (accept default)
 		"",           // listen port (accept default)
 		"100.64.2.2", // tailscale IP (manual entry)
 		"",           // health port (accept default)
 		"",           // auth token (none)
+		"",           // media dir (disabled)
 	}, "\n") + "\n"
 
 	var out bytes.Buffer
@@ -174,12 +176,13 @@ func TestRunWizard_CustomValues(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.yaml")
 
-	// With Tailscale detected: gateway URL, listen port, health port, auth token
+	// With Tailscale detected: gateway URL, listen port, health port, auth token, media dir
 	input := strings.Join([]string{
 		"http://localhost:9999", // custom gateway URL
 		"9090",                 // custom listen port
 		"9091",                 // custom health port
 		"my-secret-token",      // auth token
+		"",                     // media dir (disabled)
 	}, "\n") + "\n"
 
 	var out bytes.Buffer
@@ -245,6 +248,7 @@ func TestRunWizard_ExistingConfig_Overwrite(t *testing.T) {
 		"",  // listen port
 		"",  // health port
 		"",  // auth token
+		"",  // media dir (disabled)
 	}, "\n") + "\n"
 
 	var out bytes.Buffer
@@ -324,7 +328,7 @@ func TestGenerateConfig_AuthTokenWithSpecialChars(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			content := generateConfig("100.64.1.1:8080", "http://localhost:18800", "https://gateway.local", "127.0.0.1:8081", tt.token)
+			content := generateConfig("100.64.1.1:8080", "http://localhost:18800", "https://gateway.local", "127.0.0.1:8081", tt.token, "")
 			if !strings.Contains(content, tt.wantYAML) {
 				t.Errorf("generateConfig() with token %q:\ngot:\n%s\nwant to contain: %s", tt.token, content, tt.wantYAML)
 			}
@@ -370,6 +374,7 @@ func TestRunWizard_InvalidPortThenValid(t *testing.T) {
 		"9090", // valid listen port
 		"",     // health port (accept default)
 		"",     // auth token (none)
+		"",     // media dir (disabled)
 	}, "\n") + "\n"
 
 	var out bytes.Buffer
@@ -401,6 +406,7 @@ func TestRunWizard_IPv6TailscaleIP(t *testing.T) {
 		"", // listen port (accept default)
 		"", // health port (accept default)
 		"", // auth token (none)
+		"", // media dir (disabled)
 	}, "\n") + "\n"
 
 	var out bytes.Buffer
@@ -431,6 +437,7 @@ func TestRunWizard_GatewayURLValidation(t *testing.T) {
 		"",          // listen port
 		"",          // health port
 		"",          // auth token
+		"",          // media dir (disabled)
 	}, "\n") + "\n"
 
 	var out bytes.Buffer
@@ -447,6 +454,67 @@ func TestRunWizard_GatewayURLValidation(t *testing.T) {
 	output := out.String()
 	if !strings.Contains(output, "WARNING") || !strings.Contains(output, "not-a-url") {
 		t.Error("wizard should warn about invalid gateway URL format before validation fails")
+	}
+}
+
+func TestGenerateConfig_WithMediaDir(t *testing.T) {
+	content := generateConfig("100.64.1.1:8080", "http://localhost:18800", "https://gateway.local", "127.0.0.1:8081", "", "/home/user/.openclaw/media/outbound")
+	if !strings.Contains(content, "media:") {
+		t.Error("config should contain media section")
+	}
+	if !strings.Contains(content, "enabled: true") {
+		t.Error("config should have media enabled")
+	}
+	if !strings.Contains(content, `/home/user/.openclaw/media/outbound`) {
+		t.Error("config should contain the media directory path")
+	}
+	if !strings.Contains(content, "max_file_size: 5242880") {
+		t.Error("config should contain max_file_size")
+	}
+}
+
+func TestGenerateConfig_WithoutMediaDir(t *testing.T) {
+	content := generateConfig("100.64.1.1:8080", "http://localhost:18800", "https://gateway.local", "127.0.0.1:8081", "", "")
+	if strings.Contains(content, "media:") {
+		t.Error("config should NOT contain media section when directory is empty")
+	}
+}
+
+func TestRunWizard_WithMediaDir(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yaml")
+
+	// Create a fake media directory
+	mediaDir := filepath.Join(dir, "media", "outbound")
+	os.MkdirAll(mediaDir, 0755)
+
+	input := strings.Join([]string{
+		"",       // gateway URL (accept default)
+		"",       // listen port (accept default)
+		"",       // health port (accept default)
+		"",       // auth token (none)
+		mediaDir, // media dir
+	}, "\n") + "\n"
+
+	var out bytes.Buffer
+	err := RunWizard(strings.NewReader(input), &out, testOpts(configPath, "100.64.1.1"))
+	if err != nil {
+		t.Fatalf("RunWizard() error: %v", err)
+	}
+
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("reading config: %v", err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "media:") {
+		t.Error("config should contain media section")
+	}
+	if !strings.Contains(content, "enabled: true") {
+		t.Error("config should have media enabled")
+	}
+	if !strings.Contains(content, mediaDir) {
+		t.Errorf("config should contain media directory %s", mediaDir)
 	}
 }
 

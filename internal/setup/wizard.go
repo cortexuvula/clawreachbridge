@@ -136,24 +136,57 @@ func RunWizard(in io.Reader, out io.Writer, opts WizardOptions) error {
 	authToken := prompt(scanner, out,
 		"Auth token (leave empty for none): ", "")
 
-	// Step 7: Write config
+	// Step 7: Media injection (optional)
+	fmt.Fprintln(out)
+	fmt.Fprintln(out, "Media injection allows the bridge to attach generated images from the")
+	fmt.Fprintln(out, "gateway's outbound media directory to chat messages sent to ClawReach.")
+	mediaDir := prompt(scanner, out,
+		"Media directory (leave empty to disable, e.g. ~/.openclaw/media/outbound): ", "")
+	if mediaDir != "" {
+		// Expand ~ to home directory
+		if strings.HasPrefix(mediaDir, "~/") {
+			if home, err := os.UserHomeDir(); err == nil {
+				mediaDir = filepath.Join(home, mediaDir[2:])
+			}
+		}
+		mediaDir = filepath.Clean(mediaDir)
+		// Check if directory exists
+		if info, err := os.Stat(mediaDir); err != nil {
+			fmt.Fprintf(out, "  WARNING: %s does not exist: %v\n", mediaDir, err)
+			fmt.Fprintln(out, "  (This is OK if the gateway hasn't created it yet)")
+		} else if !info.IsDir() {
+			fmt.Fprintf(out, "  WARNING: %s is not a directory\n", mediaDir)
+		} else {
+			fmt.Fprintf(out, "  Media directory: %s\n", mediaDir)
+		}
+	}
+
+	// Step 8: Write config
 	fmt.Fprintf(out, "\nWriting config to %s...\n", configPath)
 	origin := "https://gateway.local"
-	configContent := generateConfig(listenAddress, gatewayURL, origin, healthAddress, authToken)
+	configContent := generateConfig(listenAddress, gatewayURL, origin, healthAddress, authToken, mediaDir)
 
 	if err := writeConfig(configPath, configContent, isRoot, out); err != nil {
 		return fmt.Errorf("writing config: %w", err)
 	}
 	fmt.Fprintln(out, "  Config written successfully.")
 
-	// Step 8: Validate the written config
+	// Step 9: Validate the written config
 	fmt.Fprintln(out, "  Validating config...")
 	if _, err := config.Load(configPath); err != nil {
 		return fmt.Errorf("config validation failed: %w", err)
 	}
 	fmt.Fprintln(out, "  Config is valid.")
 
-	// Step 9: Offer to start systemd service (Linux + root only)
+	// Step 10: Install systemd override for media injection (Linux + root only)
+	if isRoot && isSystemdAvailable() && mediaDir != "" {
+		if err := installMediaOverride(out, mediaDir); err != nil {
+			fmt.Fprintf(out, "  WARNING: Could not install systemd override for media: %v\n", err)
+			fmt.Fprintln(out, "  You may need to manually configure ProtectHome=false in the systemd unit.")
+		}
+	}
+
+	// Step 11: Offer to start systemd service (Linux + root only)
 	if isRoot && isSystemdAvailable() {
 		fmt.Fprintln(out)
 		startService := prompt(scanner, out,
@@ -166,7 +199,7 @@ func RunWizard(in io.Reader, out io.Writer, opts WizardOptions) error {
 		}
 	}
 
-	// Step 10: Print summary
+	// Step 12: Print summary
 	fmt.Fprintln(out)
 	fmt.Fprintln(out, "Setup complete!")
 	fmt.Fprintln(out, "===============")
@@ -320,10 +353,24 @@ func yamlEscapeString(s string) string {
 }
 
 // generateConfig creates a commented YAML config string.
-func generateConfig(listenAddress, gatewayURL, origin, healthAddress, authToken string) string {
+func generateConfig(listenAddress, gatewayURL, origin, healthAddress, authToken, mediaDir string) string {
 	authTokenLine := `  auth_token: ""`
 	if authToken != "" {
 		authTokenLine = fmt.Sprintf(`  auth_token: "%s"`, yamlEscapeString(authToken))
+	}
+
+	mediaSection := ""
+	if mediaDir != "" {
+		mediaSection = fmt.Sprintf(`
+  # Media injection: attach generated images from the gateway's outbound
+  # media directory to chat messages before forwarding to ClawReach clients.
+  media:
+    enabled: true
+    directory: "%s"
+    max_file_size: 5242880  # 5MB max per image
+    max_age: "60s"
+    extensions: [".png", ".jpg", ".jpeg", ".webp", ".gif"]
+`, yamlEscapeString(mediaDir))
 	}
 
 	return fmt.Sprintf(`# ClawReach Bridge Configuration
@@ -350,7 +397,7 @@ bridge:
   pong_timeout: "10s"
   write_timeout: "10s"
   dial_timeout: "10s"
-
+%s
 security:
   # Only allow connections from Tailscale IPs
   tailscale_only: true
@@ -383,7 +430,49 @@ health:
 monitoring:
   metrics_enabled: false
   metrics_endpoint: "/metrics"
-`, yamlEscapeString(listenAddress), yamlEscapeString(gatewayURL), yamlEscapeString(origin), authTokenLine, yamlEscapeString(healthAddress))
+`, yamlEscapeString(listenAddress), yamlEscapeString(gatewayURL), yamlEscapeString(origin), mediaSection, authTokenLine, yamlEscapeString(healthAddress))
+}
+
+// installMediaOverride creates a systemd override that allows the bridge to
+// read the media directory. The default unit has ProtectHome=true which blocks
+// access to home directories. When media injection is enabled, we need to
+// disable ProtectHome and grant read access to the specific media directory.
+// The override also runs the service as the current user so it can read files
+// created with 0600 permissions by OpenClaw.
+func installMediaOverride(out io.Writer, mediaDir string) error {
+	overrideDir := "/etc/systemd/system/clawreachbridge.service.d"
+	overridePath := filepath.Join(overrideDir, "override.conf")
+
+	if err := os.MkdirAll(overrideDir, 0755); err != nil {
+		return fmt.Errorf("creating override directory: %w", err)
+	}
+
+	// Determine the user who owns the media directory
+	currentUser := "root"
+	if u, err := user.Current(); err == nil {
+		currentUser = u.Username
+	}
+
+	content := fmt.Sprintf(`[Service]
+User=%s
+Group=%s
+ProtectHome=false
+ReadOnlyPaths=%s
+`, currentUser, currentUser, mediaDir)
+
+	if err := os.WriteFile(overridePath, []byte(content), 0644); err != nil {
+		return fmt.Errorf("writing override: %w", err)
+	}
+
+	fmt.Fprintf(out, "  Systemd override installed: %s\n", overridePath)
+	fmt.Fprintf(out, "  (Service will run as %s to read media files)\n", currentUser)
+
+	// Reload systemd to pick up the override
+	if err := exec.Command("systemctl", "daemon-reload").Run(); err != nil {
+		return fmt.Errorf("daemon-reload: %w", err)
+	}
+
+	return nil
 }
 
 // writeConfig writes the config file, creating parent directories as needed.

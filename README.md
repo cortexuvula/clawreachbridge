@@ -109,6 +109,46 @@ The web UI is powered by a JSON API available at `/api/v1/` on the health listen
 | POST | `/api/v1/reload` | Reload config from disk |
 | POST | `/api/v1/restart` | Restart service via systemd |
 
+## Media Injection
+
+When OpenClaw generates images (e.g., via AI image generation), the images are saved to the gateway's outbound media directory but are not included in WebSocket chat messages. The bridge can detect these images and inject them into chat messages before forwarding to ClawReach, so users see generated images inline in their chat.
+
+**How it works:**
+
+1. The bridge tracks chat run IDs from streaming delta messages
+2. When a final chat message arrives, it scans the media directory for images created during that run
+3. Matching images are base64-encoded and appended as `{ type: "image" }` content items
+4. ClawReach renders them inline in the chat bubble
+
+**Setup:** The setup wizard (`clawreachbridge setup`) prompts for the media directory path. When specified, it automatically:
+- Adds the `bridge.media` section to the config
+- Creates a systemd override so the bridge can read files in the user's home directory (OpenClaw creates files with `0600` permissions)
+
+**Manual configuration:** Add this to your config:
+
+```yaml
+bridge:
+  media:
+    enabled: true
+    directory: "/home/youruser/.openclaw/media/outbound"
+    max_file_size: 5242880  # 5MB max per image
+    max_age: "60s"          # Only inject images created within this window
+    extensions: [".png", ".jpg", ".jpeg", ".webp", ".gif"]
+```
+
+If the bridge runs as a different user than the one who owns the media directory, you'll need a systemd override:
+
+```ini
+# /etc/systemd/system/clawreachbridge.service.d/override.conf
+[Service]
+User=youruser
+Group=youruser
+ProtectHome=false
+ReadOnlyPaths=/home/youruser/.openclaw/media/outbound
+```
+
+Then `sudo systemctl daemon-reload && sudo systemctl restart clawreachbridge`.
+
 ## Configuration
 
 Key settings in `/etc/clawreachbridge/config.yaml` (see [`configs/config.example.yaml`](./configs/config.example.yaml) for all options):
@@ -121,6 +161,10 @@ Key settings in `/etc/clawreachbridge/config.yaml` (see [`configs/config.example
 | `bridge.write_timeout` | `30s` | Deadline for writing a single message |
 | `bridge.ping_interval` | `30s` | WebSocket ping frequency for dead peer detection |
 | `bridge.pong_timeout` | `10s` | Max wait for pong response |
+| `bridge.media.enabled` | `false` | Enable image injection from media directory |
+| `bridge.media.directory` | `""` | Path to gateway's outbound media directory |
+| `bridge.media.max_file_size` | `5242880` | Max bytes per image file (5MB) |
+| `bridge.media.max_age` | `60s` | Only inject images created within this window |
 | `security.max_connections` | `1000` | Global connection limit |
 | `security.max_connections_per_ip` | `10` | Per-IP connection limit |
 
