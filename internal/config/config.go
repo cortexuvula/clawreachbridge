@@ -35,6 +35,16 @@ type BridgeConfig struct {
 	DialTimeout         time.Duration `yaml:"dial_timeout"`
 	AllowedSubprotocols []string      `yaml:"allowed_subprotocols"`
 	TLS                 TLSConfig     `yaml:"tls"`
+	Media               MediaConfig   `yaml:"media"`
+}
+
+// MediaConfig controls image injection from the gateway's media directory.
+type MediaConfig struct {
+	Enabled     bool          `yaml:"enabled"`
+	Directory   string        `yaml:"directory"`
+	MaxFileSize int64         `yaml:"max_file_size"`
+	MaxAge      time.Duration `yaml:"max_age"`
+	Extensions  []string      `yaml:"extensions"`
 }
 
 // TLSConfig contains optional TLS settings.
@@ -99,6 +109,13 @@ func DefaultConfig() *Config {
 			WriteTimeout:   30 * time.Second,
 			ReadTimeout:    60 * time.Second,
 			DialTimeout:    10 * time.Second,
+			Media: MediaConfig{
+				Enabled:     false,
+				Directory:   "",
+				MaxFileSize: 5 * 1024 * 1024, // 5MB
+				MaxAge:      60 * time.Second,
+				Extensions:  []string{".png", ".jpg", ".jpeg", ".webp", ".gif"},
+			},
 		},
 		Security: SecurityConfig{
 			TailscaleOnly:       true,
@@ -316,6 +333,8 @@ func applyEnvOverrides(cfg *Config) {
 		"CLAWREACH_LOGGING_FILE":          func(v string) { cfg.Logging.File = v },
 		"CLAWREACH_HEALTH_ENABLED":        func(v string) { cfg.Health.Enabled = parseBool(v, cfg.Health.Enabled) },
 		"CLAWREACH_HEALTH_LISTEN_ADDRESS": func(v string) { cfg.Health.ListenAddress = v },
+		"CLAWREACH_BRIDGE_MEDIA_ENABLED":   func(v string) { cfg.Bridge.Media.Enabled = parseBool(v, cfg.Bridge.Media.Enabled) },
+		"CLAWREACH_BRIDGE_MEDIA_DIRECTORY": func(v string) { cfg.Bridge.Media.Directory = v },
 	}
 
 	for env, setter := range envMap {

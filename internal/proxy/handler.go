@@ -14,6 +14,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/cortexuvula/clawreachbridge/internal/config"
+	"github.com/cortexuvula/clawreachbridge/internal/media"
 	"github.com/cortexuvula/clawreachbridge/internal/metrics"
 	"github.com/cortexuvula/clawreachbridge/internal/security"
 	"golang.org/x/time/rate"
@@ -22,11 +23,12 @@ import (
 // Handler is the HTTP handler that accepts WebSocket connections from
 // ClawReach clients and proxies them to the OpenClaw Gateway.
 type Handler struct {
-	Config      *config.Config
-	Proxy       *Proxy
-	RateLimiter *security.RateLimiter
-	Metrics     *metrics.Metrics // optional, nil if metrics disabled
-	ShutdownCtx context.Context  // cancelled on server shutdown
+	Config        *config.Config
+	Proxy         *Proxy
+	RateLimiter   *security.RateLimiter
+	Metrics       *metrics.Metrics   // optional, nil if metrics disabled
+	MediaInjector *media.Injector    // optional, nil if media injection disabled
+	ShutdownCtx   context.Context    // cancelled on server shutdown
 
 	// httpProxy forwards non-WebSocket requests to the gateway.
 	httpProxy *httputil.ReverseProxy
@@ -57,7 +59,7 @@ func NewHandler(cfg *config.Config, p *Proxy, rl *security.RateLimiter, shutdown
 		},
 	}
 
-	return &Handler{
+	h := &Handler{
 		Config:      cfg,
 		Proxy:       p,
 		RateLimiter: rl,
@@ -66,6 +68,13 @@ func NewHandler(cfg *config.Config, p *Proxy, rl *security.RateLimiter, shutdown
 		drainCtx:    drainCtx,
 		drainCancel: drainCancel,
 	}
+
+	if cfg.Bridge.Media.Enabled {
+		h.MediaInjector = media.NewInjector(cfg.Bridge.Media)
+		slog.Info("media injection enabled", "directory", cfg.Bridge.Media.Directory)
+	}
+
+	return h
 }
 
 // StartDrain signals all active connections to begin graceful shutdown.
@@ -310,25 +319,58 @@ func (h *Handler) forwardMessages(ctx context.Context, src, dst *websocket.Conn,
 			}
 		}
 
-		writeCtx, writeCancel := context.WithTimeout(ctx, cfg.Bridge.WriteTimeout)
-		writer, err := dst.Writer(writeCtx, msgType)
-		if err != nil {
-			writeCancel()
-			slog.Debug("write failed", "direction", direction, "reason", err)
-			return
-		}
+		// For gateway→client text messages with media injection enabled:
+		// read into memory, process through injector, then write
+		if direction == "gateway→client" && msgType == websocket.MessageText &&
+			cfg.Bridge.Media.Enabled && h.MediaInjector != nil {
 
-		if _, err := io.Copy(writer, reader); err != nil {
+			payload, err := io.ReadAll(reader)
+			if err != nil {
+				slog.Debug("read failed", "direction", direction, "reason", err)
+				return
+			}
+
+			payload = h.MediaInjector.ProcessMessage(payload)
+
+			writeCtx, writeCancel := context.WithTimeout(ctx, cfg.Bridge.WriteTimeout)
+			writer, err := dst.Writer(writeCtx, msgType)
+			if err != nil {
+				writeCancel()
+				slog.Debug("write failed", "direction", direction, "reason", err)
+				return
+			}
+			if _, err := writer.Write(payload); err != nil {
+				writeCancel()
+				slog.Debug("write failed", "direction", direction, "reason", err)
+				return
+			}
+			if err := writer.Close(); err != nil {
+				writeCancel()
+				slog.Debug("flush failed", "direction", direction, "reason", err)
+				return
+			}
 			writeCancel()
-			slog.Debug("copy failed", "direction", direction, "reason", err)
-			return
-		}
-		if err := writer.Close(); err != nil {
+		} else {
+			// Original pass-through path (streaming copy)
+			writeCtx, writeCancel := context.WithTimeout(ctx, cfg.Bridge.WriteTimeout)
+			writer, err := dst.Writer(writeCtx, msgType)
+			if err != nil {
+				writeCancel()
+				slog.Debug("write failed", "direction", direction, "reason", err)
+				return
+			}
+			if _, err := io.Copy(writer, reader); err != nil {
+				writeCancel()
+				slog.Debug("copy failed", "direction", direction, "reason", err)
+				return
+			}
+			if err := writer.Close(); err != nil {
+				writeCancel()
+				slog.Debug("flush failed", "direction", direction, "reason", err)
+				return
+			}
 			writeCancel()
-			slog.Debug("flush failed", "direction", direction, "reason", err)
-			return
 		}
-		writeCancel()
 
 		h.Proxy.IncrementMessages()
 		if h.Metrics != nil {

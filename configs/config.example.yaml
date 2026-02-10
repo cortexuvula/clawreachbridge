@@ -35,6 +35,15 @@ bridge:
     cert_file: ""
     key_file: ""
 
+  # Media injection: scans gateway's outbound media dir for images generated during
+  # a chat run and injects them as base64 content items into the final chat message.
+  media:
+    enabled: false
+    directory: ""           # Path to gateway's outbound media dir, e.g. /home/user/.openclaw/media/outbound
+    max_file_size: 5242880  # 5MB max per image file
+    max_age: "60s"          # Only inject images created within this window
+    extensions: [".png", ".jpg", ".jpeg", ".webp", ".gif"]
+
 security:
   # Only allow Tailscale IPs (IPv4: 100.64.0.0/10, IPv6: fd7a:115c:a1e0::/48)
   tailscale_only: true
