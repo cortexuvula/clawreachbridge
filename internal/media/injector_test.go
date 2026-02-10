@@ -268,6 +268,116 @@ func TestProcessMessage_SkipsNonImageExtensions(t *testing.T) {
 	}
 }
 
+func TestProcessMessage_MediaPath_InjectsImage(t *testing.T) {
+	// Create a temp image file at a known path
+	dir := t.TempDir()
+	imgData := []byte("media-path-image-data")
+	imgPath := filepath.Join(dir, "generated.png")
+	if err := os.WriteFile(imgPath, imgData, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Use empty directory for scan (so dir scan finds nothing)
+	emptyDir := t.TempDir()
+	inj := NewInjector(testConfig(emptyDir))
+
+	// Track a delta
+	delta := makeChatMessage("delta", "run-media", "")
+	inj.ProcessMessage(delta)
+
+	// Send final with MEDIA: path in text
+	text := "Here's your picture!\n\nMEDIA: " + imgPath
+	final := makeChatMessage("final", "run-media", text)
+	result := inj.ProcessMessage(final)
+
+	var outer outerMessage
+	json.Unmarshal(result, &outer)
+	var chat chatPayload
+	json.Unmarshal(outer.Payload, &chat)
+	var msg chatMessage
+	json.Unmarshal(chat.Message, &msg)
+
+	if len(msg.Content) != 2 {
+		t.Fatalf("expected 2 content items (text + image from MEDIA path), got %d", len(msg.Content))
+	}
+	if msg.Content[1].Type != "image" {
+		t.Errorf("second content item should be image, got %s", msg.Content[1].Type)
+	}
+	if msg.Content[1].MimeType != "image/png" {
+		t.Errorf("expected image/png, got %s", msg.Content[1].MimeType)
+	}
+
+	decoded, err := base64.StdEncoding.DecodeString(msg.Content[1].Content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(decoded) != string(imgData) {
+		t.Error("decoded image data doesn't match")
+	}
+}
+
+func TestProcessMessage_MediaPath_SkipsNonImage(t *testing.T) {
+	dir := t.TempDir()
+	pdfPath := filepath.Join(dir, "doc.pdf")
+	os.WriteFile(pdfPath, []byte("pdf-data"), 0644)
+
+	emptyDir := t.TempDir()
+	inj := NewInjector(testConfig(emptyDir))
+
+	delta := makeChatMessage("delta", "run-pdf", "")
+	inj.ProcessMessage(delta)
+
+	text := "Generated a PDF\n\nMEDIA: " + pdfPath
+	final := makeChatMessage("final", "run-pdf", text)
+	result := inj.ProcessMessage(final)
+
+	var outer outerMessage
+	json.Unmarshal(result, &outer)
+	var chat chatPayload
+	json.Unmarshal(outer.Payload, &chat)
+	var msg chatMessage
+	json.Unmarshal(chat.Message, &msg)
+
+	if len(msg.Content) != 1 {
+		t.Errorf("expected 1 content item (PDF should be skipped), got %d", len(msg.Content))
+	}
+}
+
+func TestProcessMessage_MediaPath_MultipleImages(t *testing.T) {
+	dir := t.TempDir()
+	img1 := filepath.Join(dir, "photo1.jpg")
+	img2 := filepath.Join(dir, "photo2.png")
+	os.WriteFile(img1, []byte("jpg-data"), 0644)
+	os.WriteFile(img2, []byte("png-data"), 0644)
+
+	emptyDir := t.TempDir()
+	inj := NewInjector(testConfig(emptyDir))
+
+	delta := makeChatMessage("delta", "run-multi", "")
+	inj.ProcessMessage(delta)
+
+	text := "Here are two images\n\nMEDIA: " + img1 + "\nMEDIA: " + img2
+	final := makeChatMessage("final", "run-multi", text)
+	result := inj.ProcessMessage(final)
+
+	var outer outerMessage
+	json.Unmarshal(result, &outer)
+	var chat chatPayload
+	json.Unmarshal(outer.Payload, &chat)
+	var msg chatMessage
+	json.Unmarshal(chat.Message, &msg)
+
+	if len(msg.Content) != 3 {
+		t.Fatalf("expected 3 content items (text + 2 images), got %d", len(msg.Content))
+	}
+	if msg.Content[1].MimeType != "image/jpeg" {
+		t.Errorf("first image should be jpeg, got %s", msg.Content[1].MimeType)
+	}
+	if msg.Content[2].MimeType != "image/png" {
+		t.Errorf("second image should be png, got %s", msg.Content[2].MimeType)
+	}
+}
+
 func TestProcessMessage_InvalidJSON_PassThrough(t *testing.T) {
 	inj := NewInjector(testConfig(""))
 

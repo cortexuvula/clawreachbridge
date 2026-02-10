@@ -7,12 +7,16 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/cortexuvula/clawreachbridge/internal/config"
 )
+
+// mediaPathRe matches "MEDIA: /path/to/file.ext" lines in message text.
+var mediaPathRe = regexp.MustCompile(`(?m)^MEDIA:\s*(/\S+)$`)
 
 // Injector tracks chat runs and injects images from the gateway's media
 // directory into final chat messages before they reach the client.
@@ -124,7 +128,9 @@ func (inj *Injector) cleanStaleLocked() {
 	}
 }
 
-// enrichFinal scans for new images and injects them into the final chat message.
+// enrichFinal extracts images from the message and injects them as content items.
+// It first looks for explicit MEDIA: /path markers in the message text, then
+// falls back to scanning the configured media directory for recent images.
 func (inj *Injector) enrichFinal(outer *outerMessage, chat *chatPayload) ([]byte, error) {
 	// Look up when this run started
 	inj.mu.Lock()
@@ -138,17 +144,23 @@ func (inj *Injector) enrichFinal(outer *outerMessage, chat *chatPayload) ([]byte
 		slog.Debug("media: no tracked start for run, using maxAge fallback", "runId", chat.RunID)
 	}
 
-	// Scan for new images
-	images := inj.scanImages(runStart)
-	if len(images) == 0 {
-		// No images found, return original payload
-		return json.Marshal(outer)
-	}
-
-	// Parse the message to append image content items
+	// Parse the message
 	var msg chatMessage
 	if err := json.Unmarshal(chat.Message, &msg); err != nil {
 		return nil, fmt.Errorf("parsing chat message: %w", err)
+	}
+
+	// Strategy 1: Extract MEDIA: paths from message text
+	images := inj.extractMediaPaths(&msg)
+
+	// Strategy 2: Fall back to directory scanning
+	if len(images) == 0 {
+		images = inj.scanImages(runStart)
+	}
+
+	if len(images) == 0 {
+		// No images found, return original payload
+		return json.Marshal(outer)
 	}
 
 	msg.Content = append(msg.Content, images...)
@@ -171,6 +183,61 @@ func (inj *Injector) enrichFinal(outer *outerMessage, chat *chatPayload) ([]byte
 	outer.Payload = payloadBytes
 
 	return json.Marshal(outer)
+}
+
+// extractMediaPaths looks for "MEDIA: /path/to/file" lines in the message text
+// content items and reads matching image files.
+func (inj *Injector) extractMediaPaths(msg *chatMessage) []contentItem {
+	extSet := make(map[string]bool, len(inj.cfg.Extensions))
+	for _, ext := range inj.cfg.Extensions {
+		extSet[strings.ToLower(ext)] = true
+	}
+
+	var items []contentItem
+	for _, ci := range msg.Content {
+		if ci.Type != "text" {
+			continue
+		}
+		matches := mediaPathRe.FindAllStringSubmatch(ci.Text, -1)
+		for _, m := range matches {
+			filePath := m[1]
+			ext := strings.ToLower(filepath.Ext(filePath))
+			if !extSet[ext] {
+				slog.Debug("media: MEDIA path has non-image extension", "path", filePath, "ext", ext)
+				continue
+			}
+
+			info, err := os.Stat(filePath)
+			if err != nil {
+				slog.Warn("media: MEDIA path not accessible", "path", filePath, "error", err)
+				continue
+			}
+			if info.Size() > inj.cfg.MaxFileSize {
+				slog.Debug("media: MEDIA path file too large", "path", filePath, "size", info.Size())
+				continue
+			}
+
+			data, err := os.ReadFile(filePath)
+			if err != nil {
+				slog.Warn("media: failed to read MEDIA path", "path", filePath, "error", err)
+				continue
+			}
+
+			mimeType := mimeFromExt(ext)
+			encoded := base64.StdEncoding.EncodeToString(data)
+			items = append(items, contentItem{
+				Type:     "image",
+				MimeType: mimeType,
+				Content:  encoded,
+			})
+			slog.Debug("media: extracted image from MEDIA path",
+				"path", filePath,
+				"size", info.Size(),
+				"mimeType", mimeType,
+			)
+		}
+	}
+	return items
 }
 
 // scanImages looks for image files in the media directory that were created
