@@ -75,6 +75,7 @@ func (inj *Injector) ProcessMessage(payload []byte) []byte {
 	}
 
 	if outer.Type != "event" || outer.Event != "chat" {
+		slog.Debug("media: skipping non-chat message", "type", outer.Type, "event", outer.Event)
 		return payload
 	}
 
@@ -96,6 +97,7 @@ func (inj *Injector) ProcessMessage(payload []byte) []byte {
 		}
 		return enriched
 	default:
+		slog.Debug("media: skipping chat message with unknown state", "state", chat.State, "runId", chat.RunID)
 		return payload
 	}
 }
@@ -152,21 +154,37 @@ func (inj *Injector) enrichFinal(outer *outerMessage, chat *chatPayload) ([]byte
 
 	// Strategy 1: Extract MEDIA: paths from message text
 	images := inj.extractMediaPaths(&msg)
+	mediaPathCount := len(images)
 
 	// Strategy 2: Fall back to directory scanning
+	var dirScanCount int
 	if len(images) == 0 {
 		images = inj.scanImages(runStart)
+		dirScanCount = len(images)
 	}
 
 	if len(images) == 0 {
+		slog.Info("media: no images found for final message",
+			"runId", chat.RunID,
+			"mediaPaths", mediaPathCount,
+			"directoryScan", dirScanCount,
+			"directory", inj.cfg.Directory,
+			"runStart", runStart,
+		)
 		// No images found, return original payload
 		return json.Marshal(outer)
+	}
+
+	source := "media_paths"
+	if mediaPathCount == 0 {
+		source = "directory_scan"
 	}
 
 	msg.Content = append(msg.Content, images...)
 	slog.Info("media: injected images into chat message",
 		"runId", chat.RunID,
 		"imageCount", len(images),
+		"source", source,
 	)
 
 	// Rebuild the message chain: message → payload → outer
@@ -194,32 +212,38 @@ func (inj *Injector) extractMediaPaths(msg *chatMessage) []contentItem {
 	}
 
 	var items []contentItem
+	var totalMarkers, skippedExt, skippedAccess, skippedSize, skippedRead int
 	for _, ci := range msg.Content {
 		if ci.Type != "text" {
 			continue
 		}
 		matches := mediaPathRe.FindAllStringSubmatch(ci.Text, -1)
+		totalMarkers += len(matches)
 		for _, m := range matches {
 			filePath := m[1]
 			ext := strings.ToLower(filepath.Ext(filePath))
 			if !extSet[ext] {
 				slog.Debug("media: MEDIA path has non-image extension", "path", filePath, "ext", ext)
+				skippedExt++
 				continue
 			}
 
 			info, err := os.Stat(filePath)
 			if err != nil {
 				slog.Warn("media: MEDIA path not accessible", "path", filePath, "error", err)
+				skippedAccess++
 				continue
 			}
 			if info.Size() > inj.cfg.MaxFileSize {
-				slog.Debug("media: MEDIA path file too large", "path", filePath, "size", info.Size())
+				slog.Warn("media: MEDIA path file too large", "path", filePath, "size", info.Size(), "maxFileSize", inj.cfg.MaxFileSize)
+				skippedSize++
 				continue
 			}
 
 			data, err := os.ReadFile(filePath)
 			if err != nil {
 				slog.Warn("media: failed to read MEDIA path", "path", filePath, "error", err)
+				skippedRead++
 				continue
 			}
 
@@ -237,6 +261,15 @@ func (inj *Injector) extractMediaPaths(msg *chatMessage) []contentItem {
 			)
 		}
 	}
+
+	slog.Debug("media: extractMediaPaths complete",
+		"totalMarkers", totalMarkers,
+		"extracted", len(items),
+		"skippedExt", skippedExt,
+		"skippedAccess", skippedAccess,
+		"skippedSize", skippedSize,
+		"skippedRead", skippedRead,
+	)
 	return items
 }
 
@@ -244,6 +277,7 @@ func (inj *Injector) extractMediaPaths(msg *chatMessage) []contentItem {
 // after runStart and match the configured extensions.
 func (inj *Injector) scanImages(runStart time.Time) []contentItem {
 	if inj.cfg.Directory == "" {
+		slog.Debug("media: directory scan skipped, no directory configured")
 		return nil
 	}
 
@@ -259,13 +293,16 @@ func (inj *Injector) scanImages(runStart time.Time) []contentItem {
 	}
 
 	var items []contentItem
+	var totalFiles, wrongExt, tooOld, tooLarge int
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
 		}
+		totalFiles++
 
 		ext := strings.ToLower(filepath.Ext(entry.Name()))
 		if !extSet[ext] {
+			wrongExt++
 			continue
 		}
 
@@ -276,17 +313,20 @@ func (inj *Injector) scanImages(runStart time.Time) []contentItem {
 
 		// Only consider files modified after the run started
 		if info.ModTime().Before(runStart) {
+			tooOld++
 			continue
 		}
 
 		// Skip files that are too old (beyond MaxAge from now)
 		if time.Since(info.ModTime()) > inj.cfg.MaxAge {
+			tooOld++
 			continue
 		}
 
 		// Skip files that exceed MaxFileSize
 		if info.Size() > inj.cfg.MaxFileSize {
-			slog.Debug("media: skipping oversized file", "file", entry.Name(), "size", info.Size())
+			slog.Warn("media: skipping oversized file", "file", entry.Name(), "size", info.Size(), "maxFileSize", inj.cfg.MaxFileSize)
+			tooLarge++
 			continue
 		}
 
@@ -312,6 +352,15 @@ func (inj *Injector) scanImages(runStart time.Time) []contentItem {
 			"mimeType", mimeType,
 		)
 	}
+
+	slog.Debug("media: directory scan complete",
+		"dir", inj.cfg.Directory,
+		"totalFiles", totalFiles,
+		"wrongExt", wrongExt,
+		"tooOld", tooOld,
+		"tooLarge", tooLarge,
+		"matched", len(items),
+	)
 
 	return items
 }

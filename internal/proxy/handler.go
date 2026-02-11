@@ -244,11 +244,15 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	gatewayConn.SetReadLimit(cfg.Bridge.MaxMessageSize)
 
-	slog.Info("connection established", "client_ip", clientIP, "gateway", gatewayURL, "path", r.URL.Path)
-
 	// Determine if media injection is active for this connection path.
 	// Only operator connections (matching inject_paths) should get images injected.
 	injectMedia := cfg.Bridge.Media.Enabled && h.MediaInjector != nil && h.shouldInjectMedia(r.URL.Path)
+
+	slog.Info("connection established", "client_ip", clientIP, "gateway", gatewayURL, "path", r.URL.Path, "injectMedia", injectMedia)
+
+	if cfg.Bridge.Media.Enabled && !injectMedia {
+		slog.Debug("media: injection skipped, path not in inject_paths", "path", r.URL.Path, "inject_paths", cfg.Bridge.Media.InjectPaths)
+	}
 
 	// 8. Bidirectional forwarding with coordinated shutdown
 	// When either direction finishes, cancel context to tear down the other side.
