@@ -45,6 +45,7 @@ type MediaConfig struct {
 	MaxFileSize int64         `yaml:"max_file_size"`
 	MaxAge      time.Duration `yaml:"max_age"`
 	Extensions  []string      `yaml:"extensions"`
+	InjectPaths []string      `yaml:"inject_paths"`
 }
 
 // TLSConfig contains optional TLS settings.
@@ -115,6 +116,7 @@ func DefaultConfig() *Config {
 				MaxFileSize: 5 * 1024 * 1024, // 5MB
 				MaxAge:      60 * time.Second,
 				Extensions:  []string{".png", ".jpg", ".jpeg", ".webp", ".gif"},
+				InjectPaths: []string{"/ws/operator"},
 			},
 		},
 		Security: SecurityConfig{

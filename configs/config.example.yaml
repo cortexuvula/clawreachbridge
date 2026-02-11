@@ -43,6 +43,8 @@ bridge:
     max_file_size: 5242880  # 5MB max per image file
     max_age: "60s"          # Only inject images created within this window
     extensions: [".png", ".jpg", ".jpeg", ".webp", ".gif"]
+    inject_paths:           # Only inject on connections matching these path prefixes
+      - "/ws/operator"      # Operator connection carries chat messages; node connection does not
 
 security:
   # Only allow Tailscale IPs (IPv4: 100.64.0.0/10, IPv6: fd7a:115c:a1e0::/48)

@@ -97,6 +97,22 @@ func (h *Handler) UpdateConfig(cfg *config.Config) {
 	h.Config = cfg
 }
 
+// shouldInjectMedia reports whether the given request path matches any of
+// the configured media inject_paths prefixes. An empty inject_paths list
+// means inject on all paths (backward compatibility).
+func (h *Handler) shouldInjectMedia(path string) bool {
+	paths := h.GetConfig().Bridge.Media.InjectPaths
+	if len(paths) == 0 {
+		return true
+	}
+	for _, prefix := range paths {
+		if strings.HasPrefix(path, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	cfg := h.GetConfig()
 
@@ -228,7 +244,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	gatewayConn.SetReadLimit(cfg.Bridge.MaxMessageSize)
 
-	slog.Info("connection established", "client_ip", clientIP, "gateway", gatewayURL)
+	slog.Info("connection established", "client_ip", clientIP, "gateway", gatewayURL, "path", r.URL.Path)
+
+	// Determine if media injection is active for this connection path.
+	// Only operator connections (matching inject_paths) should get images injected.
+	injectMedia := cfg.Bridge.Media.Enabled && h.MediaInjector != nil && h.shouldInjectMedia(r.URL.Path)
 
 	// 8. Bidirectional forwarding with coordinated shutdown
 	// When either direction finishes, cancel context to tear down the other side.
@@ -274,12 +294,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		defer wg.Done()
 		defer proxyCancel()
-		h.forwardMessages(proxyCtx, clientConn, gatewayConn, "client→gateway", msgLimiter)
+		h.forwardMessages(proxyCtx, clientConn, gatewayConn, "client→gateway", msgLimiter, false)
 	}()
 	go func() {
 		defer wg.Done()
 		defer proxyCancel()
-		h.forwardMessages(proxyCtx, gatewayConn, clientConn, "gateway→client", nil)
+		h.forwardMessages(proxyCtx, gatewayConn, clientConn, "gateway→client", nil, injectMedia)
 	}()
 
 	// Cleanup: wait for both to finish, then close connections
@@ -300,7 +320,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // cancelled or either side closes. This is the core proxy loop.
 // direction is "client→gateway" or "gateway→client" for logging.
 // msgLimiter is optional; if non-nil, messages are rate-limited.
-func (h *Handler) forwardMessages(ctx context.Context, src, dst *websocket.Conn, direction string, msgLimiter *rate.Limiter) {
+func (h *Handler) forwardMessages(ctx context.Context, src, dst *websocket.Conn, direction string, msgLimiter *rate.Limiter, injectMedia bool) {
 	cfg := h.GetConfig()
 	for {
 		// Wait for the next message using only the proxy context (no timeout).
@@ -319,10 +339,9 @@ func (h *Handler) forwardMessages(ctx context.Context, src, dst *websocket.Conn,
 			}
 		}
 
-		// For gateway→client text messages with media injection enabled:
+		// For gateway→client text messages with media injection enabled on this path:
 		// read into memory, process through injector, then write
-		if direction == "gateway→client" && msgType == websocket.MessageText &&
-			cfg.Bridge.Media.Enabled && h.MediaInjector != nil {
+		if injectMedia && msgType == websocket.MessageText {
 
 			payload, err := io.ReadAll(reader)
 			if err != nil {

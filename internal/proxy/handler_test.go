@@ -511,3 +511,33 @@ func TestDrainOnShutdown(t *testing.T) {
 		t.Errorf("connection count = %d after drain, want 0", count)
 	}
 }
+
+func TestShouldInjectMedia(t *testing.T) {
+	tests := []struct {
+		name        string
+		injectPaths []string
+		reqPath     string
+		want        bool
+	}{
+		{"empty paths injects everywhere", nil, "/ws/node", true},
+		{"matching prefix", []string{"/ws/operator"}, "/ws/operator", true},
+		{"matching prefix with subpath", []string{"/ws/operator"}, "/ws/operator/session/123", true},
+		{"non-matching path", []string{"/ws/operator"}, "/ws/node", false},
+		{"multiple prefixes match first", []string{"/ws/operator", "/ws/chat"}, "/ws/operator", true},
+		{"multiple prefixes match second", []string{"/ws/operator", "/ws/chat"}, "/ws/chat/session", true},
+		{"multiple prefixes no match", []string{"/ws/operator", "/ws/chat"}, "/ws/node", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := testConfig()
+			cfg.Bridge.Media.InjectPaths = tt.injectPaths
+			handler := NewHandler(cfg, New(), nil, context.Background())
+
+			got := handler.shouldInjectMedia(tt.reqPath)
+			if got != tt.want {
+				t.Errorf("shouldInjectMedia(%q) = %v, want %v (inject_paths=%v)", tt.reqPath, got, tt.want, tt.injectPaths)
+			}
+		})
+	}
+}
