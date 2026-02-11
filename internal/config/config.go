@@ -116,7 +116,7 @@ func DefaultConfig() *Config {
 				MaxFileSize: 10 * 1024 * 1024, // 10MB
 				MaxAge:      60 * time.Second,
 				Extensions:  []string{".png", ".jpg", ".jpeg", ".webp", ".gif"},
-				InjectPaths: []string{"/ws/operator"},
+				InjectPaths: nil,
 			},
 		},
 		Security: SecurityConfig{

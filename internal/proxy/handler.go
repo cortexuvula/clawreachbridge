@@ -71,7 +71,11 @@ func NewHandler(cfg *config.Config, p *Proxy, rl *security.RateLimiter, shutdown
 
 	if cfg.Bridge.Media.Enabled {
 		h.MediaInjector = media.NewInjector(cfg.Bridge.Media)
-		slog.Info("media injection enabled", "directory", cfg.Bridge.Media.Directory)
+		if len(cfg.Bridge.Media.InjectPaths) > 0 {
+			slog.Info("media injection enabled", "directory", cfg.Bridge.Media.Directory, "inject_paths", cfg.Bridge.Media.InjectPaths)
+		} else {
+			slog.Info("media injection enabled", "directory", cfg.Bridge.Media.Directory, "inject_paths", "all")
+		}
 	}
 
 	return h

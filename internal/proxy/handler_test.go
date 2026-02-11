@@ -520,6 +520,7 @@ func TestShouldInjectMedia(t *testing.T) {
 		want        bool
 	}{
 		{"empty paths injects everywhere", nil, "/ws/node", true},
+		{"empty paths injects root", nil, "/", true},
 		{"matching prefix", []string{"/ws/operator"}, "/ws/operator", true},
 		{"matching prefix with subpath", []string{"/ws/operator"}, "/ws/operator/session/123", true},
 		{"non-matching path", []string{"/ws/operator"}, "/ws/node", false},
