@@ -113,7 +113,7 @@ func DefaultConfig() *Config {
 			Media: MediaConfig{
 				Enabled:     false,
 				Directory:   "",
-				MaxFileSize: 5 * 1024 * 1024, // 5MB
+				MaxFileSize: 10 * 1024 * 1024, // 10MB
 				MaxAge:      60 * time.Second,
 				Extensions:  []string{".png", ".jpg", ".jpeg", ".webp", ".gif"},
 				InjectPaths: []string{"/ws/operator"},

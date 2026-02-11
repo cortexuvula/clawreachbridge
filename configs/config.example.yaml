@@ -40,7 +40,7 @@ bridge:
   media:
     enabled: false
     directory: ""           # Path to gateway's outbound media dir, e.g. /home/user/.openclaw/media/outbound
-    max_file_size: 5242880  # 5MB max per image file
+    max_file_size: 10485760 # 10MB max per image file
     max_age: "60s"          # Only inject images created within this window
     extensions: [".png", ".jpg", ".jpeg", ".webp", ".gif"]
     inject_paths:           # Only inject on connections matching these path prefixes
