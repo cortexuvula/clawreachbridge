@@ -52,11 +52,12 @@ func NewHandler(cfg *config.Config, p *Proxy, rl *security.RateLimiter, shutdown
 	origin := cfg.Bridge.Origin
 	gatewayURL, _ := url.Parse(cfg.Bridge.GatewayURL)
 	httpProxy := &httputil.ReverseProxy{
-		Director: func(req *http.Request) {
-			req.URL.Scheme = gatewayURL.Scheme
-			req.URL.Host = gatewayURL.Host
-			req.Host = gatewayURL.Host
-			req.Header.Set("Origin", origin)
+		Rewrite: func(r *httputil.ProxyRequest) {
+			r.SetURL(gatewayURL)
+			r.Out.Host = gatewayURL.Host
+			r.Out.Header.Set("Origin", origin)
+			// Do NOT call r.SetXForwarded() — the gateway treats
+			// X-Forwarded-For as a non-local request and rejects it.
 		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			slog.Error("HTTP proxy error", "url", r.URL.Path, "error", err)

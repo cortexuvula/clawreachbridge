@@ -452,9 +452,10 @@ func TestHandlerHTTPProxyGatewayDown(t *testing.T) {
 }
 
 func TestHandlerHTTPProxyInjectsOrigin(t *testing.T) {
-	var receivedOrigin string
+	var receivedOrigin, receivedXFF string
 	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		receivedOrigin = r.Header.Get("Origin")
+		receivedXFF = r.Header.Get("X-Forwarded-For")
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer gateway.Close()
@@ -476,6 +477,9 @@ func TestHandlerHTTPProxyInjectsOrigin(t *testing.T) {
 	}
 	if receivedOrigin != "https://my-gateway.local" {
 		t.Errorf("Origin = %q, want %q", receivedOrigin, "https://my-gateway.local")
+	}
+	if receivedXFF != "" {
+		t.Errorf("X-Forwarded-For = %q, want empty (bridge and gateway are co-located)", receivedXFF)
 	}
 }
 
