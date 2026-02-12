@@ -120,6 +120,19 @@ func (h *Handler) shouldInjectMedia(path string) bool {
 	return false
 }
 
+// isPublicPath reports whether the given request path matches any of
+// the configured public_paths prefixes. Requests to public paths skip
+// auth token checks but still require Tailscale IP validation and rate limiting.
+func (h *Handler) isPublicPath(path string) bool {
+	paths := h.GetConfig().Security.PublicPaths
+	for _, prefix := range paths {
+		if strings.HasPrefix(path, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	cfg := h.GetConfig()
 
@@ -139,7 +152,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 3. Optional auth token check (header first, query param fallback)
-	if cfg.Security.AuthToken != "" {
+	// Public paths (e.g. A2UI static assets) bypass auth — WebViews can't pass tokens.
+	if cfg.Security.AuthToken != "" && !h.isPublicPath(r.URL.Path) {
 		token := security.ExtractBearerToken(r.Header.Get("Authorization"))
 		if token == "" {
 			token = r.URL.Query().Get("token")

@@ -74,6 +74,7 @@ type TLSConfig struct {
 type SecurityConfig struct {
 	TailscaleOnly       bool            `yaml:"tailscale_only"`
 	AuthToken           string          `yaml:"auth_token"`
+	PublicPaths         []string        `yaml:"public_paths"`
 	RateLimit           RateLimitConfig `yaml:"rate_limit"`
 	MaxConnections      int             `yaml:"max_connections"`
 	MaxConnectionsPerIP int             `yaml:"max_connections_per_ip"`
@@ -145,6 +146,7 @@ func DefaultConfig() *Config {
 		},
 		Security: SecurityConfig{
 			TailscaleOnly:       true,
+			PublicPaths:         []string{"/__openclaw__/a2ui/"},
 			MaxConnections:      1000,
 			MaxConnectionsPerIP: 10,
 			RateLimit: RateLimitConfig{
@@ -370,6 +372,9 @@ func applyEnvOverrides(cfg *Config) {
 		"CLAWREACH_BRIDGE_DIAL_TIMEOUT":             func(v string) { cfg.Bridge.DialTimeout = parseDuration(v, cfg.Bridge.DialTimeout) },
 		"CLAWREACH_SECURITY_TAILSCALE_ONLY":         func(v string) { cfg.Security.TailscaleOnly = parseBool(v, cfg.Security.TailscaleOnly) },
 		"CLAWREACH_SECURITY_AUTH_TOKEN":             func(v string) { cfg.Security.AuthToken = v },
+		"CLAWREACH_SECURITY_PUBLIC_PATHS": func(v string) {
+			cfg.Security.PublicPaths = strings.Split(v, ",")
+		},
 		"CLAWREACH_SECURITY_MAX_CONNECTIONS":        func(v string) { cfg.Security.MaxConnections = parseInt(v, cfg.Security.MaxConnections) },
 		"CLAWREACH_SECURITY_MAX_CONNECTIONS_PER_IP": func(v string) { cfg.Security.MaxConnectionsPerIP = parseInt(v, cfg.Security.MaxConnectionsPerIP) },
 		"CLAWREACH_SECURITY_RATE_LIMIT_ENABLED":     func(v string) { cfg.Security.RateLimit.Enabled = parseBool(v, cfg.Security.RateLimit.Enabled) },
@@ -403,6 +408,7 @@ func (c *Config) ApplyReloadableFields(newCfg *Config) *Config {
 	updated := *c
 	updated.Security.RateLimit = newCfg.Security.RateLimit
 	updated.Security.AuthToken = newCfg.Security.AuthToken
+	updated.Security.PublicPaths = newCfg.Security.PublicPaths
 	updated.Security.MaxConnections = newCfg.Security.MaxConnections
 	updated.Security.MaxConnectionsPerIP = newCfg.Security.MaxConnectionsPerIP
 	updated.Logging.Level = newCfg.Logging.Level

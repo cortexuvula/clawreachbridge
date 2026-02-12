@@ -512,6 +512,108 @@ func TestDrainOnShutdown(t *testing.T) {
 	}
 }
 
+func TestHandlerPublicPathBypassesAuth(t *testing.T) {
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer gateway.Close()
+
+	cfg := testConfig()
+	cfg.Bridge.GatewayURL = gateway.URL
+	cfg.Security.AuthToken = "secret-token"
+	// default public_paths includes /__openclaw__/a2ui/
+
+	handler := NewHandler(cfg, New(), nil, context.Background())
+
+	req := httptest.NewRequest("GET", "/__openclaw__/a2ui/?platform=android", nil)
+	req.RemoteAddr = "127.0.0.1:12345"
+	// No Authorization header — should still pass
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want %d (public path should bypass auth)", rec.Code, http.StatusOK)
+	}
+}
+
+func TestHandlerPublicPathStillRequiresTailscale(t *testing.T) {
+	cfg := testConfig()
+	cfg.Security.TailscaleOnly = true
+	cfg.Security.AuthToken = "secret-token"
+
+	handler := NewHandler(cfg, New(), nil, context.Background())
+
+	req := httptest.NewRequest("GET", "/__openclaw__/a2ui/?platform=android", nil)
+	req.RemoteAddr = "192.168.1.1:12345" // not a Tailscale IP
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want %d (public path should still require Tailscale)", rec.Code, http.StatusForbidden)
+	}
+}
+
+func TestHandlerNonPublicPathStillRequiresAuth(t *testing.T) {
+	cfg := testConfig()
+	cfg.Security.AuthToken = "secret-token"
+
+	handler := NewHandler(cfg, New(), nil, context.Background())
+
+	req := httptest.NewRequest("GET", "/other-path", nil)
+	req.RemoteAddr = "127.0.0.1:12345"
+	// No Authorization header
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want %d (non-public path should require auth)", rec.Code, http.StatusForbidden)
+	}
+}
+
+func TestHandlerPublicPathCustomList(t *testing.T) {
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer gateway.Close()
+
+	cfg := testConfig()
+	cfg.Bridge.GatewayURL = gateway.URL
+	cfg.Security.AuthToken = "secret-token"
+	cfg.Security.PublicPaths = []string{"/static/", "/public/"}
+
+	handler := NewHandler(cfg, New(), nil, context.Background())
+
+	// /static/ prefix matches
+	req := httptest.NewRequest("GET", "/static/app.js", nil)
+	req.RemoteAddr = "127.0.0.1:12345"
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("/static/app.js: status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	// /public/ prefix matches
+	req2 := httptest.NewRequest("GET", "/public/index.html", nil)
+	req2.RemoteAddr = "127.0.0.1:12345"
+	rec2 := httptest.NewRecorder()
+	handler.ServeHTTP(rec2, req2)
+	if rec2.Code != http.StatusOK {
+		t.Errorf("/public/index.html: status = %d, want %d", rec2.Code, http.StatusOK)
+	}
+
+	// /__openclaw__/a2ui/ NOT in custom list — should require auth
+	req3 := httptest.NewRequest("GET", "/__openclaw__/a2ui/?platform=android", nil)
+	req3.RemoteAddr = "127.0.0.1:12345"
+	rec3 := httptest.NewRecorder()
+	handler.ServeHTTP(rec3, req3)
+	if rec3.Code != http.StatusForbidden {
+		t.Errorf("/__openclaw__/a2ui/: status = %d, want %d (not in custom public_paths)", rec3.Code, http.StatusForbidden)
+	}
+}
+
 func TestShouldInjectMedia(t *testing.T) {
 	tests := []struct {
 		name        string

@@ -52,6 +52,9 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.Bridge.Canvas.MaxAge != 5*time.Minute {
 		t.Errorf("default canvas.max_age = %v, want 5m", cfg.Bridge.Canvas.MaxAge)
 	}
+	if len(cfg.Security.PublicPaths) != 1 || cfg.Security.PublicPaths[0] != "/__openclaw__/a2ui/" {
+		t.Errorf("default public_paths = %v, want [/__openclaw__/a2ui/]", cfg.Security.PublicPaths)
+	}
 }
 
 func TestLoadFromFile(t *testing.T) {
@@ -383,6 +386,10 @@ func TestValidation(t *testing.T) {
 				c.Bridge.Canvas.StateTracking = false
 				c.Bridge.Canvas.JSONLBufferSize = 0 // would fail if validated
 			},
+		},
+		{
+			name:   "empty public_paths is valid",
+			modify: func(c *Config) { c.Security.PublicPaths = nil },
 		},
 	}
 

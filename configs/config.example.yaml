@@ -68,6 +68,12 @@ security:
   # File permissions should be 0640, owned by the service account
   auth_token: ""
 
+  # Paths exempt from auth token check (prefix match).
+  # Tailscale IP validation and rate limiting still apply.
+  # Default: A2UI static assets (served to WebViews that can't pass auth tokens)
+  public_paths:
+    - "/__openclaw__/a2ui/"
+
   # Rate limiting
   rate_limit:
     enabled: true
