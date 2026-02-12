@@ -12,6 +12,9 @@ type Metrics struct {
 	MessagesTotal     *prometheus.CounterVec
 	ErrorsTotal       *prometheus.CounterVec
 	GatewayReachable  prometheus.Gauge
+	ReactionsTotal    *prometheus.CounterVec
+	CanvasEventsTotal *prometheus.CounterVec
+	CanvasReplaysTotal prometheus.Counter
 }
 
 // New creates and registers all Prometheus metrics.
@@ -36,6 +39,18 @@ func New() *Metrics {
 		GatewayReachable: promauto.NewGauge(prometheus.GaugeOpts{
 			Name: "clawreachbridge_gateway_reachable",
 			Help: "Gateway reachability (1=up, 0=down)",
+		}),
+		ReactionsTotal: promauto.NewCounterVec(prometheus.CounterOpts{
+			Name: "clawreachbridge_reactions_total",
+			Help: "Total reaction messages observed",
+		}, []string{"action"}),
+		CanvasEventsTotal: promauto.NewCounterVec(prometheus.CounterOpts{
+			Name: "clawreachbridge_canvas_events_total",
+			Help: "Total canvas events observed",
+		}, []string{"method"}),
+		CanvasReplaysTotal: promauto.NewCounter(prometheus.CounterOpts{
+			Name: "clawreachbridge_canvas_replays_total",
+			Help: "Total canvas state replays on reconnect",
 		}),
 	}
 }

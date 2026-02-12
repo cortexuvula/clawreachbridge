@@ -37,6 +37,21 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.Security.MaxConnections != 1000 {
 		t.Errorf("default max_connections = %d, want %d", cfg.Security.MaxConnections, 1000)
 	}
+	if cfg.Bridge.Reactions.Enabled {
+		t.Error("default reactions.enabled should be false")
+	}
+	if cfg.Bridge.Reactions.Mode != "passthrough" {
+		t.Errorf("default reactions.mode = %q, want %q", cfg.Bridge.Reactions.Mode, "passthrough")
+	}
+	if cfg.Bridge.Canvas.StateTracking {
+		t.Error("default canvas.state_tracking should be false")
+	}
+	if cfg.Bridge.Canvas.JSONLBufferSize != 5 {
+		t.Errorf("default canvas.jsonl_buffer_size = %d, want 5", cfg.Bridge.Canvas.JSONLBufferSize)
+	}
+	if cfg.Bridge.Canvas.MaxAge != 5*time.Minute {
+		t.Errorf("default canvas.max_age = %v, want 5m", cfg.Bridge.Canvas.MaxAge)
+	}
 }
 
 func TestLoadFromFile(t *testing.T) {
@@ -298,6 +313,76 @@ func TestValidation(t *testing.T) {
 				c.Security.TailscaleOnly = false
 			},
 			wantErr: "bridge.listen_address and health.listen_address must be different",
+		},
+		{
+			name: "reactions passthrough is valid",
+			modify: func(c *Config) {
+				c.Bridge.Reactions.Enabled = true
+				c.Bridge.Reactions.Mode = "passthrough"
+			},
+		},
+		{
+			name: "reactions bridge mode rejected",
+			modify: func(c *Config) {
+				c.Bridge.Reactions.Enabled = true
+				c.Bridge.Reactions.Mode = "bridge"
+			},
+			wantErr: "bridge.reactions.mode \"bridge\" is not yet implemented",
+		},
+		{
+			name: "reactions invalid mode",
+			modify: func(c *Config) {
+				c.Bridge.Reactions.Enabled = true
+				c.Bridge.Reactions.Mode = "invalid"
+			},
+			wantErr: "bridge.reactions.mode must be one of: passthrough",
+		},
+		{
+			name: "canvas valid config",
+			modify: func(c *Config) {
+				c.Bridge.Canvas.StateTracking = true
+				c.Bridge.Canvas.JSONLBufferSize = 10
+				c.Bridge.Canvas.MaxAge = 5 * time.Minute
+			},
+		},
+		{
+			name: "canvas buffer size too low",
+			modify: func(c *Config) {
+				c.Bridge.Canvas.StateTracking = true
+				c.Bridge.Canvas.JSONLBufferSize = 0
+			},
+			wantErr: "bridge.canvas.jsonl_buffer_size must be between 1 and 100",
+		},
+		{
+			name: "canvas buffer size too high",
+			modify: func(c *Config) {
+				c.Bridge.Canvas.StateTracking = true
+				c.Bridge.Canvas.JSONLBufferSize = 101
+			},
+			wantErr: "bridge.canvas.jsonl_buffer_size must be between 1 and 100",
+		},
+		{
+			name: "canvas max_age too low",
+			modify: func(c *Config) {
+				c.Bridge.Canvas.StateTracking = true
+				c.Bridge.Canvas.MaxAge = 500 * time.Millisecond
+			},
+			wantErr: "bridge.canvas.max_age must be between 1s and 30m",
+		},
+		{
+			name: "canvas max_age too high",
+			modify: func(c *Config) {
+				c.Bridge.Canvas.StateTracking = true
+				c.Bridge.Canvas.MaxAge = 31 * time.Minute
+			},
+			wantErr: "bridge.canvas.max_age must be between 1s and 30m",
+		},
+		{
+			name: "canvas disabled skips validation",
+			modify: func(c *Config) {
+				c.Bridge.Canvas.StateTracking = false
+				c.Bridge.Canvas.JSONLBufferSize = 0 // would fail if validated
+			},
 		},
 	}
 

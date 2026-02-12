@@ -45,6 +45,19 @@ bridge:
     extensions: [".png", ".jpg", ".jpeg", ".webp", ".gif"]
     inject_paths: []        # Empty = inject on all connections (default). Set prefixes to restrict, e.g. ["/ws/operator"]
 
+  # Reaction sync: observes client→gateway chat.react messages for metrics.
+  # Requires monitoring.metrics_enabled: true for reaction counting to work.
+  reactions:
+    enabled: false
+    mode: "passthrough"    # metrics only; "bridge" mode is not yet implemented
+
+  # Canvas state tracking: shadows canvas.present/hide/pushJSONL messages
+  # from the gateway and replays them to reconnecting clients.
+  canvas:
+    state_tracking: false       # Shadow canvas state for reconnect replay
+    jsonl_buffer_size: 5        # Number of recent JSONL payloads to retain (1-100)
+    max_age: "5m"               # Discard canvas state older than this (1s-30m)
+
 security:
   # Only allow Tailscale IPs (IPv4: 100.64.0.0/10, IPv6: fd7a:115c:a1e0::/48)
   tailscale_only: true

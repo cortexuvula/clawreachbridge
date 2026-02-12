@@ -23,19 +23,34 @@ type Config struct {
 
 // BridgeConfig contains the core proxy settings.
 type BridgeConfig struct {
-	ListenAddress       string        `yaml:"listen_address"`
-	GatewayURL          string        `yaml:"gateway_url"`
-	Origin              string        `yaml:"origin"`
-	DrainTimeout        time.Duration `yaml:"drain_timeout"`
-	MaxMessageSize      int64         `yaml:"max_message_size"`
-	PingInterval        time.Duration `yaml:"ping_interval"`
-	PongTimeout         time.Duration `yaml:"pong_timeout"`
-	WriteTimeout        time.Duration `yaml:"write_timeout"`
-	ReadTimeout         time.Duration `yaml:"read_timeout"`
-	DialTimeout         time.Duration `yaml:"dial_timeout"`
-	AllowedSubprotocols []string      `yaml:"allowed_subprotocols"`
-	TLS                 TLSConfig     `yaml:"tls"`
-	Media               MediaConfig   `yaml:"media"`
+	ListenAddress       string         `yaml:"listen_address"`
+	GatewayURL          string         `yaml:"gateway_url"`
+	Origin              string         `yaml:"origin"`
+	DrainTimeout        time.Duration  `yaml:"drain_timeout"`
+	MaxMessageSize      int64          `yaml:"max_message_size"`
+	PingInterval        time.Duration  `yaml:"ping_interval"`
+	PongTimeout         time.Duration  `yaml:"pong_timeout"`
+	WriteTimeout        time.Duration  `yaml:"write_timeout"`
+	ReadTimeout         time.Duration  `yaml:"read_timeout"`
+	DialTimeout         time.Duration  `yaml:"dial_timeout"`
+	AllowedSubprotocols []string       `yaml:"allowed_subprotocols"`
+	TLS                 TLSConfig      `yaml:"tls"`
+	Media               MediaConfig    `yaml:"media"`
+	Reactions           ReactionConfig `yaml:"reactions"`
+	Canvas              CanvasConfig   `yaml:"canvas"`
+}
+
+// ReactionConfig controls reaction message inspection.
+type ReactionConfig struct {
+	Enabled bool   `yaml:"enabled"`
+	Mode    string `yaml:"mode"`
+}
+
+// CanvasConfig controls canvas state tracking for reconnect replay.
+type CanvasConfig struct {
+	StateTracking  bool          `yaml:"state_tracking"`
+	JSONLBufferSize int          `yaml:"jsonl_buffer_size"`
+	MaxAge          time.Duration `yaml:"max_age"`
 }
 
 // MediaConfig controls image injection from the gateway's media directory.
@@ -117,6 +132,15 @@ func DefaultConfig() *Config {
 				MaxAge:      60 * time.Second,
 				Extensions:  []string{".png", ".jpg", ".jpeg", ".webp", ".gif"},
 				InjectPaths: nil,
+			},
+			Reactions: ReactionConfig{
+				Enabled: false,
+				Mode:    "passthrough",
+			},
+			Canvas: CanvasConfig{
+				StateTracking:   false,
+				JSONLBufferSize: 5,
+				MaxAge:          5 * time.Minute,
 			},
 		},
 		Security: SecurityConfig{
@@ -287,6 +311,28 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("logging.format must be one of: json, text")
 	}
 
+	// Reactions validation
+	if c.Bridge.Reactions.Enabled {
+		switch c.Bridge.Reactions.Mode {
+		case "passthrough":
+			// valid
+		case "bridge":
+			return fmt.Errorf("bridge.reactions.mode \"bridge\" is not yet implemented")
+		default:
+			return fmt.Errorf("bridge.reactions.mode must be one of: passthrough")
+		}
+	}
+
+	// Canvas validation
+	if c.Bridge.Canvas.StateTracking {
+		if c.Bridge.Canvas.JSONLBufferSize < 1 || c.Bridge.Canvas.JSONLBufferSize > 100 {
+			return fmt.Errorf("bridge.canvas.jsonl_buffer_size must be between 1 and 100")
+		}
+		if c.Bridge.Canvas.MaxAge < time.Second || c.Bridge.Canvas.MaxAge > 30*time.Minute {
+			return fmt.Errorf("bridge.canvas.max_age must be between 1s and 30m")
+		}
+	}
+
 	// Health validation
 	if c.Health.Enabled {
 		if c.Health.ListenAddress == "" {
@@ -335,8 +381,13 @@ func applyEnvOverrides(cfg *Config) {
 		"CLAWREACH_LOGGING_FILE":          func(v string) { cfg.Logging.File = v },
 		"CLAWREACH_HEALTH_ENABLED":        func(v string) { cfg.Health.Enabled = parseBool(v, cfg.Health.Enabled) },
 		"CLAWREACH_HEALTH_LISTEN_ADDRESS": func(v string) { cfg.Health.ListenAddress = v },
-		"CLAWREACH_BRIDGE_MEDIA_ENABLED":   func(v string) { cfg.Bridge.Media.Enabled = parseBool(v, cfg.Bridge.Media.Enabled) },
-		"CLAWREACH_BRIDGE_MEDIA_DIRECTORY": func(v string) { cfg.Bridge.Media.Directory = v },
+		"CLAWREACH_BRIDGE_MEDIA_ENABLED":      func(v string) { cfg.Bridge.Media.Enabled = parseBool(v, cfg.Bridge.Media.Enabled) },
+		"CLAWREACH_BRIDGE_MEDIA_DIRECTORY":    func(v string) { cfg.Bridge.Media.Directory = v },
+		"CLAWREACH_BRIDGE_REACTIONS_ENABLED":  func(v string) { cfg.Bridge.Reactions.Enabled = parseBool(v, cfg.Bridge.Reactions.Enabled) },
+		"CLAWREACH_BRIDGE_REACTIONS_MODE":     func(v string) { cfg.Bridge.Reactions.Mode = v },
+		"CLAWREACH_BRIDGE_CANVAS_STATE_TRACKING":   func(v string) { cfg.Bridge.Canvas.StateTracking = parseBool(v, cfg.Bridge.Canvas.StateTracking) },
+		"CLAWREACH_BRIDGE_CANVAS_JSONL_BUFFER_SIZE": func(v string) { cfg.Bridge.Canvas.JSONLBufferSize = parseInt(v, cfg.Bridge.Canvas.JSONLBufferSize) },
+		"CLAWREACH_BRIDGE_CANVAS_MAX_AGE":           func(v string) { cfg.Bridge.Canvas.MaxAge = parseDuration(v, cfg.Bridge.Canvas.MaxAge) },
 	}
 
 	for env, setter := range envMap {

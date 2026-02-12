@@ -15,6 +15,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/spf13/cobra"
 
+	"github.com/cortexuvula/clawreachbridge/internal/canvas"
 	"github.com/cortexuvula/clawreachbridge/internal/config"
 	"github.com/cortexuvula/clawreachbridge/internal/health"
 	"github.com/cortexuvula/clawreachbridge/internal/logging"
@@ -187,6 +188,28 @@ func runBridge(configPath string, verbose bool) error {
 		m = metrics.New()
 		handler.Metrics = m
 		slog.Info("prometheus metrics enabled", "endpoint", cfg.Monitoring.MetricsEndpoint)
+	}
+
+	// Optional reaction inspector (requires metrics for counting)
+	if cfg.Bridge.Reactions.Enabled && m != nil {
+		handler.ReactionInspector = proxy.NewReactionInspector(m.ReactionsTotal)
+		slog.Info("reaction inspector enabled", "mode", cfg.Bridge.Reactions.Mode)
+	}
+	if cfg.Bridge.Reactions.Enabled && !cfg.Monitoring.MetricsEnabled {
+		slog.Warn("reactions enabled but metrics disabled; reaction counting requires metrics")
+	}
+
+	// Optional canvas state tracking
+	if cfg.Bridge.Canvas.StateTracking {
+		tracker := canvas.NewTracker(cfg.Bridge.Canvas)
+		if m != nil {
+			tracker.SetMetrics(m.CanvasEventsTotal, m.CanvasReplaysTotal)
+		}
+		handler.CanvasTracker = tracker
+		slog.Info("canvas state tracking enabled",
+			"jsonl_buffer_size", cfg.Bridge.Canvas.JSONLBufferSize,
+			"max_age", cfg.Bridge.Canvas.MaxAge,
+		)
 	}
 
 	// Reload config closure — shared by SIGHUP handler and web UI

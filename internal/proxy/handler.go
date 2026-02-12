@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/cortexuvula/clawreachbridge/internal/canvas"
 	"github.com/cortexuvula/clawreachbridge/internal/config"
 	"github.com/cortexuvula/clawreachbridge/internal/media"
 	"github.com/cortexuvula/clawreachbridge/internal/metrics"
@@ -23,12 +24,14 @@ import (
 // Handler is the HTTP handler that accepts WebSocket connections from
 // ClawReach clients and proxies them to the OpenClaw Gateway.
 type Handler struct {
-	Config        *config.Config
-	Proxy         *Proxy
-	RateLimiter   *security.RateLimiter
-	Metrics       *metrics.Metrics   // optional, nil if metrics disabled
-	MediaInjector *media.Injector    // optional, nil if media injection disabled
-	ShutdownCtx   context.Context    // cancelled on server shutdown
+	Config            *config.Config
+	Proxy             *Proxy
+	RateLimiter       *security.RateLimiter
+	Metrics           *metrics.Metrics   // optional, nil if metrics disabled
+	MediaInjector     *media.Injector         // optional, nil if media injection disabled
+	ReactionInspector *ReactionInspector      // optional, nil if reactions disabled
+	CanvasTracker     *canvas.CanvasTracker   // optional, nil if canvas tracking disabled
+	ShutdownCtx       context.Context         // cancelled on server shutdown
 
 	// httpProxy forwards non-WebSocket requests to the gateway.
 	httpProxy *httputil.ReverseProxy
@@ -248,9 +251,32 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	gatewayConn.SetReadLimit(cfg.Bridge.MaxMessageSize)
 
-	// Determine if media injection is active for this connection path.
-	// Only operator connections (matching inject_paths) should get images injected.
+	// Replay canvas state for reconnecting clients (before forwarding starts)
+	if h.CanvasTracker != nil {
+		if err := h.CanvasTracker.ReplayMessages(dialCtx, clientConn); err != nil {
+			slog.Warn("canvas replay failed", "client_ip", clientIP, "error", err)
+			// Non-fatal: continue with normal forwarding
+		}
+	}
+
+	// Build inspector chains for each direction.
+	var upstream, downstream []MessageInspector
+
+	// Media injection: gateway→client text messages on matching paths.
 	injectMedia := cfg.Bridge.Media.Enabled && h.MediaInjector != nil && h.shouldInjectMedia(r.URL.Path)
+	if injectMedia {
+		downstream = append(downstream, &mediaInspectorAdapter{h.MediaInjector})
+	}
+
+	// Canvas inspector: gateway→client text messages (observe only).
+	if h.CanvasTracker != nil {
+		downstream = append(downstream, &canvasInspectorAdapter{h.CanvasTracker})
+	}
+
+	// Reaction inspector: client→gateway text messages.
+	if h.ReactionInspector != nil {
+		upstream = append(upstream, h.ReactionInspector)
+	}
 
 	slog.Info("connection established", "client_ip", clientIP, "gateway", gatewayURL, "path", r.URL.Path, "injectMedia", injectMedia)
 
@@ -302,12 +328,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		defer wg.Done()
 		defer proxyCancel()
-		h.forwardMessages(proxyCtx, clientConn, gatewayConn, "client→gateway", msgLimiter, false)
+		h.forwardMessages(proxyCtx, clientConn, gatewayConn, "client→gateway", msgLimiter, upstream)
 	}()
 	go func() {
 		defer wg.Done()
 		defer proxyCancel()
-		h.forwardMessages(proxyCtx, gatewayConn, clientConn, "gateway→client", nil, injectMedia)
+		h.forwardMessages(proxyCtx, gatewayConn, clientConn, "gateway→client", nil, downstream)
 	}()
 
 	// Cleanup: wait for both to finish, then close connections
@@ -328,7 +354,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // cancelled or either side closes. This is the core proxy loop.
 // direction is "client→gateway" or "gateway→client" for logging.
 // msgLimiter is optional; if non-nil, messages are rate-limited.
-func (h *Handler) forwardMessages(ctx context.Context, src, dst *websocket.Conn, direction string, msgLimiter *rate.Limiter, injectMedia bool) {
+// inspectors is optional; if non-empty, text messages are read into memory
+// and passed through each inspector. Otherwise messages stream via io.Copy.
+func (h *Handler) forwardMessages(ctx context.Context, src, dst *websocket.Conn, direction string, msgLimiter *rate.Limiter, inspectors []MessageInspector) {
 	cfg := h.GetConfig()
 	for {
 		// Wait for the next message using only the proxy context (no timeout).
@@ -347,17 +375,18 @@ func (h *Handler) forwardMessages(ctx context.Context, src, dst *websocket.Conn,
 			}
 		}
 
-		// For gateway→client text messages with media injection enabled on this path:
-		// read into memory, process through injector, then write
-		if injectMedia && msgType == websocket.MessageText {
-
+		// When inspectors are configured and the message is text, read into
+		// memory and run the inspector chain. Otherwise stream via io.Copy.
+		if len(inspectors) > 0 && msgType == websocket.MessageText {
 			payload, err := io.ReadAll(reader)
 			if err != nil {
 				slog.Debug("read failed", "direction", direction, "reason", err)
 				return
 			}
 
-			payload = h.MediaInjector.ProcessMessage(payload)
+			for _, insp := range inspectors {
+				payload = insp.InspectMessage(payload, msgType)
+			}
 
 			writeCtx, writeCancel := context.WithTimeout(ctx, cfg.Bridge.WriteTimeout)
 			writer, err := dst.Writer(writeCtx, msgType)
@@ -378,7 +407,7 @@ func (h *Handler) forwardMessages(ctx context.Context, src, dst *websocket.Conn,
 			}
 			writeCancel()
 		} else {
-			// Original pass-through path (streaming copy)
+			// Streaming pass-through path (zero overhead)
 			writeCtx, writeCancel := context.WithTimeout(ctx, cfg.Bridge.WriteTimeout)
 			writer, err := dst.Writer(writeCtx, msgType)
 			if err != nil {

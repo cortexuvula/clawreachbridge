@@ -30,6 +30,16 @@ func TestNew(t *testing.T) {
 		t.Error("GatewayReachable is nil")
 	}
 
+	if m.ReactionsTotal == nil {
+		t.Error("ReactionsTotal is nil")
+	}
+	if m.CanvasEventsTotal == nil {
+		t.Error("CanvasEventsTotal is nil")
+	}
+	if m.CanvasReplaysTotal == nil {
+		t.Error("CanvasReplaysTotal is nil")
+	}
+
 	// Verify metrics can be used without panic
 	m.ConnectionsTotal.Inc()
 	m.ActiveConnections.Set(5)
@@ -37,6 +47,12 @@ func TestNew(t *testing.T) {
 	m.MessagesTotal.WithLabelValues("downstream").Inc()
 	m.ErrorsTotal.WithLabelValues("dial_failure").Inc()
 	m.GatewayReachable.Set(1)
+	m.ReactionsTotal.WithLabelValues("add").Inc()
+	m.ReactionsTotal.WithLabelValues("remove").Inc()
+	m.CanvasEventsTotal.WithLabelValues("present").Inc()
+	m.CanvasEventsTotal.WithLabelValues("hide").Inc()
+	m.CanvasEventsTotal.WithLabelValues("pushJSONL").Inc()
+	m.CanvasReplaysTotal.Inc()
 
 	// Verify metrics are gathered
 	families, err := reg.Gather()
@@ -55,6 +71,9 @@ func TestNew(t *testing.T) {
 		"clawreachbridge_messages_total",
 		"clawreachbridge_errors_total",
 		"clawreachbridge_gateway_reachable",
+		"clawreachbridge_reactions_total",
+		"clawreachbridge_canvas_events_total",
+		"clawreachbridge_canvas_replays_total",
 	}
 	for _, name := range expected {
 		if !names[name] {
