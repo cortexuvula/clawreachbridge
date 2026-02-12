@@ -48,9 +48,10 @@ type ReactionConfig struct {
 
 // CanvasConfig controls canvas state tracking for reconnect replay.
 type CanvasConfig struct {
-	StateTracking  bool          `yaml:"state_tracking"`
-	JSONLBufferSize int          `yaml:"jsonl_buffer_size"`
+	StateTracking   bool          `yaml:"state_tracking"`
+	JSONLBufferSize int           `yaml:"jsonl_buffer_size"`
 	MaxAge          time.Duration `yaml:"max_age"`
+	A2UIURL         string        `yaml:"a2ui_url"`
 }
 
 // MediaConfig controls image injection from the gateway's media directory.
@@ -393,6 +394,7 @@ func applyEnvOverrides(cfg *Config) {
 		"CLAWREACH_BRIDGE_CANVAS_STATE_TRACKING":   func(v string) { cfg.Bridge.Canvas.StateTracking = parseBool(v, cfg.Bridge.Canvas.StateTracking) },
 		"CLAWREACH_BRIDGE_CANVAS_JSONL_BUFFER_SIZE": func(v string) { cfg.Bridge.Canvas.JSONLBufferSize = parseInt(v, cfg.Bridge.Canvas.JSONLBufferSize) },
 		"CLAWREACH_BRIDGE_CANVAS_MAX_AGE":           func(v string) { cfg.Bridge.Canvas.MaxAge = parseDuration(v, cfg.Bridge.Canvas.MaxAge) },
+		"CLAWREACH_BRIDGE_CANVAS_A2UI_URL":          func(v string) { cfg.Bridge.Canvas.A2UIURL = v },
 	}
 
 	for env, setter := range envMap {
@@ -413,6 +415,7 @@ func (c *Config) ApplyReloadableFields(newCfg *Config) *Config {
 	updated.Security.MaxConnectionsPerIP = newCfg.Security.MaxConnectionsPerIP
 	updated.Logging.Level = newCfg.Logging.Level
 	updated.Bridge.MaxMessageSize = newCfg.Bridge.MaxMessageSize
+	updated.Bridge.Canvas.A2UIURL = newCfg.Bridge.Canvas.A2UIURL
 	return &updated
 }
 

@@ -57,6 +57,9 @@ bridge:
     state_tracking: false       # Shadow canvas state for reconnect replay
     jsonl_buffer_size: 5        # Number of recent JSONL payloads to retain (1-100)
     max_age: "5m"               # Discard canvas state older than this (1s-30m)
+    a2ui_url: ""                # Full URL for A2UI WebView (injected into canvas.present params)
+                                # e.g. "http://100.64.0.1:8080/__openclaw__/a2ui/"
+                                # Empty = no injection (client derives URL from WebSocket connection)
 
 security:
   # Only allow Tailscale IPs (IPv4: 100.64.0.0/10, IPv6: fd7a:115c:a1e0::/48)

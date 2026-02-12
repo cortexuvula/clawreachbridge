@@ -52,6 +52,9 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.Bridge.Canvas.MaxAge != 5*time.Minute {
 		t.Errorf("default canvas.max_age = %v, want 5m", cfg.Bridge.Canvas.MaxAge)
 	}
+	if cfg.Bridge.Canvas.A2UIURL != "" {
+		t.Errorf("default canvas.a2ui_url = %q, want empty", cfg.Bridge.Canvas.A2UIURL)
+	}
 	if len(cfg.Security.PublicPaths) != 1 || cfg.Security.PublicPaths[0] != "/__openclaw__/a2ui/" {
 		t.Errorf("default public_paths = %v, want [/__openclaw__/a2ui/]", cfg.Security.PublicPaths)
 	}
@@ -132,6 +135,7 @@ func TestEnvOverrides(t *testing.T) {
 	t.Setenv("CLAWREACH_SECURITY_AUTH_TOKEN", "env-token")
 	t.Setenv("CLAWREACH_LOGGING_LEVEL", "debug")
 	t.Setenv("CLAWREACH_SECURITY_TAILSCALE_ONLY", "false")
+	t.Setenv("CLAWREACH_BRIDGE_CANVAS_A2UI_URL", "http://100.64.0.1:8080/__openclaw__/a2ui/")
 
 	cfg, err := Load("")
 	if err != nil {
@@ -149,6 +153,9 @@ func TestEnvOverrides(t *testing.T) {
 	}
 	if cfg.Security.TailscaleOnly {
 		t.Error("tailscale_only should be false from env override")
+	}
+	if cfg.Bridge.Canvas.A2UIURL != "http://100.64.0.1:8080/__openclaw__/a2ui/" {
+		t.Errorf("canvas.a2ui_url = %q, want env override", cfg.Bridge.Canvas.A2UIURL)
 	}
 }
 
@@ -444,12 +451,16 @@ func TestApplyReloadableFields(t *testing.T) {
 	newCfg.Security.AuthToken = "new-token"
 	newCfg.Logging.Level = "debug"
 	newCfg.Bridge.MaxMessageSize = 2097152
+	newCfg.Bridge.Canvas.A2UIURL = "http://100.64.0.1:8080/__openclaw__/a2ui/"
 
 	updated := old.ApplyReloadableFields(newCfg)
 
 	// Original should be unchanged
 	if old.Security.AuthToken != "" {
 		t.Errorf("original auth_token should be unchanged, got %q", old.Security.AuthToken)
+	}
+	if old.Bridge.Canvas.A2UIURL != "" {
+		t.Errorf("original a2ui_url should be unchanged, got %q", old.Bridge.Canvas.A2UIURL)
 	}
 
 	// Updated should have new values
@@ -461,6 +472,9 @@ func TestApplyReloadableFields(t *testing.T) {
 	}
 	if updated.Bridge.MaxMessageSize != 2097152 {
 		t.Errorf("max_message_size not reloaded")
+	}
+	if updated.Bridge.Canvas.A2UIURL != "http://100.64.0.1:8080/__openclaw__/a2ui/" {
+		t.Errorf("a2ui_url not reloaded, got %q", updated.Bridge.Canvas.A2UIURL)
 	}
 }
 

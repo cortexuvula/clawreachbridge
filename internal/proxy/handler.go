@@ -282,9 +282,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		downstream = append(downstream, &mediaInspectorAdapter{h.MediaInjector})
 	}
 
-	// Canvas inspector: gateway→client text messages (observe only).
-	if h.CanvasTracker != nil {
-		downstream = append(downstream, &canvasInspectorAdapter{h.CanvasTracker})
+	// Canvas inspector: gateway→client text messages.
+	// Active when tracker is enabled OR a2ui_url is configured.
+	a2uiURL := cfg.Bridge.Canvas.A2UIURL
+	if h.CanvasTracker != nil || a2uiURL != "" {
+		downstream = append(downstream, &canvasInspectorAdapter{
+			tracker: h.CanvasTracker,
+			a2uiURL: a2uiURL,
+		})
 	}
 
 	// Reaction inspector: client→gateway text messages.
@@ -292,7 +297,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		upstream = append(upstream, h.ReactionInspector)
 	}
 
-	slog.Info("connection established", "client_ip", clientIP, "gateway", gatewayURL, "path", r.URL.Path, "injectMedia", injectMedia)
+	logAttrs := []any{"client_ip", clientIP, "gateway", gatewayURL, "path", r.URL.Path, "injectMedia", injectMedia}
+	if a2uiURL != "" {
+		logAttrs = append(logAttrs, "a2ui_url", a2uiURL)
+	}
+	slog.Info("connection established", logAttrs...)
 
 	if cfg.Bridge.Media.Enabled && !injectMedia {
 		slog.Debug("media: injection skipped, path not in inject_paths", "path", r.URL.Path, "inject_paths", cfg.Bridge.Media.InjectPaths)
