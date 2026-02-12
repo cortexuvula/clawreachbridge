@@ -49,12 +49,14 @@ type Handler struct {
 func NewHandler(cfg *config.Config, p *Proxy, rl *security.RateLimiter, shutdownCtx context.Context) *Handler {
 	drainCtx, drainCancel := context.WithCancel(context.Background())
 
+	origin := cfg.Bridge.Origin
 	gatewayURL, _ := url.Parse(cfg.Bridge.GatewayURL)
 	httpProxy := &httputil.ReverseProxy{
 		Director: func(req *http.Request) {
 			req.URL.Scheme = gatewayURL.Scheme
 			req.URL.Host = gatewayURL.Host
 			req.Host = gatewayURL.Host
+			req.Header.Set("Origin", origin)
 		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			slog.Error("HTTP proxy error", "url", r.URL.Path, "error", err)

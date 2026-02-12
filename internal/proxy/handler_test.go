@@ -451,6 +451,34 @@ func TestHandlerHTTPProxyGatewayDown(t *testing.T) {
 	}
 }
 
+func TestHandlerHTTPProxyInjectsOrigin(t *testing.T) {
+	var receivedOrigin string
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedOrigin = r.Header.Get("Origin")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer gateway.Close()
+
+	cfg := testConfig()
+	cfg.Bridge.GatewayURL = gateway.URL
+	cfg.Bridge.Origin = "https://my-gateway.local"
+
+	handler := NewHandler(cfg, New(), nil, context.Background())
+
+	req := httptest.NewRequest("GET", "/__openclaw__/a2ui/", nil)
+	req.RemoteAddr = "127.0.0.1:12345"
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if receivedOrigin != "https://my-gateway.local" {
+		t.Errorf("Origin = %q, want %q", receivedOrigin, "https://my-gateway.local")
+	}
+}
+
 func TestDrainOnShutdown(t *testing.T) {
 	gw := echoGateway(t)
 	t.Cleanup(gw.Close)
