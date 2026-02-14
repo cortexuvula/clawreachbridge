@@ -16,6 +16,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/cortexuvula/clawreachbridge/internal/canvas"
+	"github.com/cortexuvula/clawreachbridge/internal/chatsync"
 	"github.com/cortexuvula/clawreachbridge/internal/config"
 	"github.com/cortexuvula/clawreachbridge/internal/health"
 	"github.com/cortexuvula/clawreachbridge/internal/logging"
@@ -210,6 +211,15 @@ func runBridge(configPath string, verbose bool) error {
 			"jsonl_buffer_size", cfg.Bridge.Canvas.JSONLBufferSize,
 			"max_age", cfg.Bridge.Canvas.MaxAge,
 		)
+	}
+
+	// Optional cross-device message sync
+	if cfg.Bridge.Sync.Enabled {
+		syncStore := chatsync.NewMessageStore(cfg.Bridge.Sync.MaxHistory)
+		syncRegistry := chatsync.NewClientRegistry()
+		handler.SyncStore = syncStore
+		handler.SyncRegistry = syncRegistry
+		slog.Info("cross-device message sync enabled", "max_history", cfg.Bridge.Sync.MaxHistory)
 	}
 
 	// Reload config closure — shared by SIGHUP handler and web UI

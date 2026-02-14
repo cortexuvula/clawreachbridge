@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/cortexuvula/clawreachbridge/internal/canvas"
+	"github.com/cortexuvula/clawreachbridge/internal/chatsync"
 	"github.com/cortexuvula/clawreachbridge/internal/config"
 	"github.com/cortexuvula/clawreachbridge/internal/media"
 	"github.com/cortexuvula/clawreachbridge/internal/metrics"
@@ -31,6 +33,8 @@ type Handler struct {
 	MediaInjector     *media.Injector         // optional, nil if media injection disabled
 	ReactionInspector *ReactionInspector      // optional, nil if reactions disabled
 	CanvasTracker     *canvas.CanvasTracker   // optional, nil if canvas tracking disabled
+	SyncStore         *chatsync.MessageStore  // optional, nil if sync disabled
+	SyncRegistry      *chatsync.ClientRegistry // optional, nil if sync disabled
 	ShutdownCtx       context.Context         // cancelled on server shutdown
 
 	// httpProxy forwards non-WebSocket requests to the gateway.
@@ -300,6 +304,15 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		upstream = append(upstream, h.ReactionInspector)
 	}
 
+	// Sync inspectors: cross-device message sync.
+	var syncUpstream *SyncUpstreamInspector
+	if h.SyncStore != nil && h.SyncRegistry != nil {
+		clientID := fmt.Sprintf("c-%d", time.Now().UnixNano())
+		syncUpstream = NewSyncUpstreamInspector(h.ShutdownCtx, clientConn, h.SyncStore, h.SyncRegistry, clientID)
+		upstream = append(upstream, syncUpstream)
+		downstream = append(downstream, NewSyncDownstreamInspector(h.SyncStore, syncUpstream.SessionKey))
+	}
+
 	logAttrs := []any{"client_ip", clientIP, "gateway", gatewayURL, "path", r.URL.Path, "injectMedia", injectMedia}
 	if a2uiURL != "" {
 		logAttrs = append(logAttrs, "a2ui_url", a2uiURL)
@@ -368,6 +381,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		wg.Wait()
 		closeClient(websocket.StatusGoingAway, "")
 		closeGateway()
+		if syncUpstream != nil {
+			syncUpstream.Cleanup()
+		}
 		h.Proxy.DecrementConnections(clientIP)
 		if h.Metrics != nil {
 			h.Metrics.ActiveConnections.Dec()
@@ -412,6 +428,12 @@ func (h *Handler) forwardMessages(ctx context.Context, src, dst *websocket.Conn,
 
 			for _, insp := range inspectors {
 				payload = insp.InspectMessage(payload, msgType)
+				if payload == nil {
+					break
+				}
+			}
+			if payload == nil {
+				continue // Inspector handled this message (e.g. sync history response)
 			}
 
 			writeCtx, writeCancel := context.WithTimeout(ctx, cfg.Bridge.WriteTimeout)

@@ -61,6 +61,12 @@ bridge:
                                 # e.g. "http://100.64.0.1:8080/__openclaw__/a2ui/"
                                 # Empty = no injection (client derives URL from WebSocket connection)
 
+  # Cross-device message sync: captures chat messages in-memory and echoes user
+  # messages to sibling clients. Also intercepts sessions.history requests.
+  sync:
+    enabled: false
+    max_history: 200          # Number of messages to retain per session (10-10000)
+
 security:
   # Only allow Tailscale IPs (IPv4: 100.64.0.0/10, IPv6: fd7a:115c:a1e0::/48)
   tailscale_only: true

@@ -38,12 +38,19 @@ type BridgeConfig struct {
 	Media               MediaConfig    `yaml:"media"`
 	Reactions           ReactionConfig `yaml:"reactions"`
 	Canvas              CanvasConfig   `yaml:"canvas"`
+	Sync                SyncConfig     `yaml:"sync"`
 }
 
 // ReactionConfig controls reaction message inspection.
 type ReactionConfig struct {
 	Enabled bool   `yaml:"enabled"`
 	Mode    string `yaml:"mode"`
+}
+
+// SyncConfig controls cross-device message sync via the bridge.
+type SyncConfig struct {
+	Enabled    bool `yaml:"enabled"`
+	MaxHistory int  `yaml:"max_history"`
 }
 
 // CanvasConfig controls canvas state tracking for reconnect replay.
@@ -143,6 +150,10 @@ func DefaultConfig() *Config {
 				StateTracking:   false,
 				JSONLBufferSize: 5,
 				MaxAge:          5 * time.Minute,
+			},
+			Sync: SyncConfig{
+				Enabled:    false,
+				MaxHistory: 200,
 			},
 		},
 		Security: SecurityConfig{
@@ -336,6 +347,13 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	// Sync validation
+	if c.Bridge.Sync.Enabled {
+		if c.Bridge.Sync.MaxHistory < 10 || c.Bridge.Sync.MaxHistory > 10000 {
+			return fmt.Errorf("bridge.sync.max_history must be between 10 and 10000")
+		}
+	}
+
 	// Health validation
 	if c.Health.Enabled {
 		if c.Health.ListenAddress == "" {
@@ -395,6 +413,8 @@ func applyEnvOverrides(cfg *Config) {
 		"CLAWREACH_BRIDGE_CANVAS_JSONL_BUFFER_SIZE": func(v string) { cfg.Bridge.Canvas.JSONLBufferSize = parseInt(v, cfg.Bridge.Canvas.JSONLBufferSize) },
 		"CLAWREACH_BRIDGE_CANVAS_MAX_AGE":           func(v string) { cfg.Bridge.Canvas.MaxAge = parseDuration(v, cfg.Bridge.Canvas.MaxAge) },
 		"CLAWREACH_BRIDGE_CANVAS_A2UI_URL":          func(v string) { cfg.Bridge.Canvas.A2UIURL = v },
+		"CLAWREACH_BRIDGE_SYNC_ENABLED":             func(v string) { cfg.Bridge.Sync.Enabled = parseBool(v, cfg.Bridge.Sync.Enabled) },
+		"CLAWREACH_BRIDGE_SYNC_MAX_HISTORY":         func(v string) { cfg.Bridge.Sync.MaxHistory = parseInt(v, cfg.Bridge.Sync.MaxHistory) },
 	}
 
 	for env, setter := range envMap {

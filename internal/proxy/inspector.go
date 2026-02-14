@@ -12,6 +12,7 @@ import (
 
 // MessageInspector observes and optionally transforms WebSocket text messages.
 // Implementations must be safe for concurrent use.
+// Returning nil suppresses forwarding — the message is consumed by the inspector.
 type MessageInspector interface {
 	InspectMessage(payload []byte, msgType websocket.MessageType) []byte
 }
