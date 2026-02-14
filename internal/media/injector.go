@@ -57,12 +57,14 @@ type chatMessage struct {
 	Timestamp int64         `json:"timestamp,omitempty"`
 }
 
-// contentItem is a single content element (text or image).
+// contentItem is a single content element (text, image, or file).
 type contentItem struct {
 	Type     string `json:"type"`
 	Text     string `json:"text,omitempty"`
 	MimeType string `json:"mimeType,omitempty"`
 	Content  string `json:"content,omitempty"`
+	FileName string `json:"fileName,omitempty"`
+	FileSize int64  `json:"fileSize,omitempty"`
 }
 
 // ProcessMessage inspects a gateway→client WebSocket message and enriches
@@ -181,9 +183,9 @@ func (inj *Injector) enrichFinal(outer *outerMessage, chat *chatPayload) ([]byte
 	}
 
 	msg.Content = append(msg.Content, images...)
-	slog.Info("media: injected images into chat message",
+	slog.Info("media: injected media into chat message",
 		"runId", chat.RunID,
-		"imageCount", len(images),
+		"mediaCount", len(images),
 		"source", source,
 	)
 
@@ -249,15 +251,22 @@ func (inj *Injector) extractMediaPaths(msg *chatMessage) []contentItem {
 
 			mimeType := mimeFromExt(ext)
 			encoded := base64.StdEncoding.EncodeToString(data)
+			contentType := "image"
+			if !strings.HasPrefix(mimeType, "image/") {
+				contentType = "file"
+			}
 			items = append(items, contentItem{
-				Type:     "image",
+				Type:     contentType,
 				MimeType: mimeType,
 				Content:  encoded,
+				FileName: filepath.Base(filePath),
+				FileSize: info.Size(),
 			})
-			slog.Debug("media: extracted image from MEDIA path",
+			slog.Debug("media: extracted media from MEDIA path",
 				"path", filePath,
 				"size", info.Size(),
 				"mimeType", mimeType,
+				"contentType", contentType,
 			)
 		}
 	}
@@ -339,17 +348,24 @@ func (inj *Injector) scanImages(runStart time.Time) []contentItem {
 
 		mimeType := mimeFromExt(ext)
 		encoded := base64.StdEncoding.EncodeToString(data)
+		contentType := "image"
+		if !strings.HasPrefix(mimeType, "image/") {
+			contentType = "file"
+		}
 
 		items = append(items, contentItem{
-			Type:     "image",
+			Type:     contentType,
 			MimeType: mimeType,
 			Content:  encoded,
+			FileName: entry.Name(),
+			FileSize: info.Size(),
 		})
 
-		slog.Debug("media: found image for injection",
+		slog.Debug("media: found media for injection",
 			"file", entry.Name(),
 			"size", info.Size(),
 			"mimeType", mimeType,
+			"contentType", contentType,
 		)
 	}
 
@@ -376,6 +392,18 @@ func mimeFromExt(ext string) string {
 		return "image/webp"
 	case ".gif":
 		return "image/gif"
+	case ".pdf":
+		return "application/pdf"
+	case ".txt":
+		return "text/plain"
+	case ".doc", ".docx":
+		return "application/msword"
+	case ".mp3":
+		return "audio/mpeg"
+	case ".mp4":
+		return "video/mp4"
+	case ".zip":
+		return "application/zip"
 	default:
 		return "application/octet-stream"
 	}
