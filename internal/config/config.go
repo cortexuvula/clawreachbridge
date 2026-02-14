@@ -69,6 +69,7 @@ type MediaConfig struct {
 	MaxAge      time.Duration `yaml:"max_age"`
 	Extensions  []string      `yaml:"extensions"`
 	InjectPaths []string      `yaml:"inject_paths"`
+	AllowedDirs []string      `yaml:"allowed_dirs"` // restrict MEDIA: paths to these directories
 }
 
 // TLSConfig contains optional TLS settings.
@@ -141,6 +142,7 @@ func DefaultConfig() *Config {
 				MaxAge:      60 * time.Second,
 				Extensions:  []string{".png", ".jpg", ".jpeg", ".webp", ".gif"},
 				InjectPaths: nil,
+				AllowedDirs: nil, // defaults to [Directory] if empty
 			},
 			Reactions: ReactionConfig{
 				Enabled: false,

@@ -277,9 +277,12 @@ func TestProcessMessage_MediaPath_InjectsImage(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Use empty directory for scan (so dir scan finds nothing)
+	// Use empty directory for scan (so dir scan finds nothing),
+	// but allow the file dir for MEDIA: path resolution.
 	emptyDir := t.TempDir()
-	inj := NewInjector(testConfig(emptyDir))
+	cfg := testConfig(emptyDir)
+	cfg.AllowedDirs = []string{dir, emptyDir}
+	inj := NewInjector(cfg)
 
 	// Track a delta
 	delta := makeChatMessage("delta", "run-media", "")
@@ -305,6 +308,11 @@ func TestProcessMessage_MediaPath_InjectsImage(t *testing.T) {
 	}
 	if msg.Content[1].MimeType != "image/png" {
 		t.Errorf("expected image/png, got %s", msg.Content[1].MimeType)
+	}
+
+	// MEDIA: marker should be stripped from text
+	if msg.Content[0].Text != "Here's your picture!" {
+		t.Errorf("MEDIA marker should be stripped from text, got: %q", msg.Content[0].Text)
 	}
 
 	decoded, err := base64.StdEncoding.DecodeString(msg.Content[1].Content)
@@ -351,7 +359,9 @@ func TestProcessMessage_MediaPath_MultipleImages(t *testing.T) {
 	os.WriteFile(img2, []byte("png-data"), 0644)
 
 	emptyDir := t.TempDir()
-	inj := NewInjector(testConfig(emptyDir))
+	cfg := testConfig(emptyDir)
+	cfg.AllowedDirs = []string{dir, emptyDir}
+	inj := NewInjector(cfg)
 
 	delta := makeChatMessage("delta", "run-multi", "")
 	inj.ProcessMessage(delta)

@@ -21,16 +21,39 @@ var mediaPathRe = regexp.MustCompile(`(?m)^MEDIA:\s*(/\S+)$`)
 // Injector tracks chat runs and injects images from the gateway's media
 // directory into final chat messages before they reach the client.
 type Injector struct {
-	cfg       config.MediaConfig
-	mu        sync.Mutex
-	runStarts map[string]time.Time // runId → first delta timestamp
+	cfg         config.MediaConfig
+	allowedDirs []string // resolved absolute paths for MEDIA: path validation
+	mu          sync.Mutex
+	runStarts   map[string]time.Time // runId → first delta timestamp
 }
 
 // NewInjector creates a media injector with the given config.
 func NewInjector(cfg config.MediaConfig) *Injector {
+	dirs := cfg.AllowedDirs
+	if len(dirs) == 0 && cfg.Directory != "" {
+		dirs = []string{cfg.Directory}
+	}
+	// Resolve all allowed directories to absolute paths.
+	var resolved []string
+	for _, d := range dirs {
+		abs, err := filepath.Abs(d)
+		if err != nil {
+			slog.Warn("media: failed to resolve allowed_dir", "dir", d, "error", err)
+			continue
+		}
+		// Ensure trailing separator for prefix matching.
+		if !strings.HasSuffix(abs, string(filepath.Separator)) {
+			abs += string(filepath.Separator)
+		}
+		resolved = append(resolved, abs)
+	}
+	if len(resolved) > 0 {
+		slog.Info("media: path allowlist configured", "allowed_dirs", resolved)
+	}
 	return &Injector{
-		cfg:       cfg,
-		runStarts: make(map[string]time.Time),
+		cfg:         cfg,
+		allowedDirs: resolved,
+		runStarts:   make(map[string]time.Time),
 	}
 }
 
@@ -90,7 +113,7 @@ func (inj *Injector) ProcessMessage(payload []byte) []byte {
 	switch chat.State {
 	case "delta":
 		inj.trackDelta(chat.RunID)
-		return payload
+		return inj.stripMediaFromDelta(payload, &outer, &chat)
 	case "final":
 		enriched, err := inj.enrichFinal(&outer, &chat)
 		if err != nil {
@@ -130,6 +153,80 @@ func (inj *Injector) cleanStaleLocked() {
 			slog.Debug("media: cleaned stale run", "runId", id)
 		}
 	}
+}
+
+// stripMediaFromDelta removes MEDIA: lines from streaming delta messages so
+// internal file paths don't flash on screen before the final message.
+func (inj *Injector) stripMediaFromDelta(original []byte, outer *outerMessage, chat *chatPayload) []byte {
+	if chat.Message == nil {
+		return original
+	}
+
+	var msg chatMessage
+	if err := json.Unmarshal(chat.Message, &msg); err != nil {
+		return original
+	}
+
+	modified := false
+	for i, ci := range msg.Content {
+		if ci.Type != "text" {
+			continue
+		}
+		cleaned := mediaPathRe.ReplaceAllString(ci.Text, "")
+		cleaned = strings.TrimRight(cleaned, "\n")
+		if cleaned != ci.Text {
+			msg.Content[i].Text = cleaned
+			modified = true
+		}
+	}
+
+	if !modified {
+		return original
+	}
+
+	msgBytes, err := json.Marshal(msg)
+	if err != nil {
+		return original
+	}
+	chat.Message = msgBytes
+
+	payloadBytes, err := json.Marshal(chat)
+	if err != nil {
+		return original
+	}
+	outer.Payload = payloadBytes
+
+	result, err := json.Marshal(outer)
+	if err != nil {
+		return original
+	}
+	slog.Debug("media: stripped MEDIA markers from delta", "runId", chat.RunID)
+	return result
+}
+
+// isPathAllowed checks that the resolved file path falls within one of the
+// configured allowed directories. Resolves symlinks to prevent traversal.
+func (inj *Injector) isPathAllowed(filePath string) bool {
+	if len(inj.allowedDirs) == 0 {
+		return true // no restriction configured
+	}
+
+	// Resolve symlinks and get absolute path.
+	resolved, err := filepath.EvalSymlinks(filePath)
+	if err != nil {
+		// File might not exist yet; fall back to Abs.
+		resolved, err = filepath.Abs(filePath)
+		if err != nil {
+			return false
+		}
+	}
+
+	for _, dir := range inj.allowedDirs {
+		if strings.HasPrefix(resolved+string(filepath.Separator), dir) || strings.HasPrefix(resolved, dir) {
+			return true
+		}
+	}
+	return false
 }
 
 // enrichFinal extracts images from the message and injects them as content items.
@@ -213,20 +310,46 @@ func (inj *Injector) extractMediaPaths(msg *chatMessage) []contentItem {
 		extSet[strings.ToLower(ext)] = true
 	}
 
+	// Size budget: reserve 64KB for JSON envelope overhead.
+	maxPayload := inj.cfg.MaxFileSize // per-file limit
+	const envelopeOverhead = 65536
+	var totalB64Size int64
+	budgetMax := int64(0)
+	if inj.cfg.MaxFileSize > 0 {
+		// Use max_message_size as the total budget if available via MaxFileSize proxy.
+		// Base64 expands by 4/3, so budget = (max_message_size - overhead) * 3/4.
+		budgetMax = (maxPayload*4/3 + envelopeOverhead) * 10 // generous total budget
+	}
+
 	var items []contentItem
-	var totalMarkers, skippedExt, skippedAccess, skippedSize, skippedRead int
-	for _, ci := range msg.Content {
+	var totalMarkers, skippedExt, skippedPath, skippedAccess, skippedSize, skippedRead, skippedBudget int
+	for i, ci := range msg.Content {
 		if ci.Type != "text" {
 			continue
 		}
 		matches := mediaPathRe.FindAllStringSubmatch(ci.Text, -1)
 		totalMarkers += len(matches)
+
+		// Strip MEDIA: markers from text content after processing.
+		if len(matches) > 0 {
+			cleaned := mediaPathRe.ReplaceAllString(ci.Text, "")
+			cleaned = strings.TrimRight(cleaned, "\n")
+			msg.Content[i].Text = cleaned
+		}
+
 		for _, m := range matches {
 			filePath := m[1]
 			ext := strings.ToLower(filepath.Ext(filePath))
 			if !extSet[ext] {
-				slog.Debug("media: MEDIA path has non-image extension", "path", filePath, "ext", ext)
+				slog.Debug("media: MEDIA path has non-matching extension", "path", filePath, "ext", ext)
 				skippedExt++
+				continue
+			}
+
+			// Path allowlist check.
+			if !inj.isPathAllowed(filePath) {
+				slog.Warn("media: MEDIA path outside allowed directories", "path", filePath, "allowed_dirs", inj.allowedDirs)
+				skippedPath++
 				continue
 			}
 
@@ -239,6 +362,15 @@ func (inj *Injector) extractMediaPaths(msg *chatMessage) []contentItem {
 			if info.Size() > inj.cfg.MaxFileSize {
 				slog.Warn("media: MEDIA path file too large", "path", filePath, "size", info.Size(), "maxFileSize", inj.cfg.MaxFileSize)
 				skippedSize++
+				continue
+			}
+
+			// Size budget check: will this file's base64 fit in the message?
+			b64Size := (info.Size()*4 + 2) / 3 // ceiling of 4/3
+			if budgetMax > 0 && totalB64Size+b64Size+envelopeOverhead > budgetMax {
+				slog.Warn("media: skipping file, total base64 size would exceed message budget",
+					"path", filePath, "fileB64Size", b64Size, "currentTotal", totalB64Size)
+				skippedBudget++
 				continue
 			}
 
@@ -255,6 +387,7 @@ func (inj *Injector) extractMediaPaths(msg *chatMessage) []contentItem {
 			if !strings.HasPrefix(mimeType, "image/") {
 				contentType = "file"
 			}
+			totalB64Size += int64(len(encoded))
 			items = append(items, contentItem{
 				Type:     contentType,
 				MimeType: mimeType,
@@ -275,9 +408,12 @@ func (inj *Injector) extractMediaPaths(msg *chatMessage) []contentItem {
 		"totalMarkers", totalMarkers,
 		"extracted", len(items),
 		"skippedExt", skippedExt,
+		"skippedPath", skippedPath,
 		"skippedAccess", skippedAccess,
 		"skippedSize", skippedSize,
 		"skippedRead", skippedRead,
+		"skippedBudget", skippedBudget,
+		"totalB64Size", totalB64Size,
 	)
 	return items
 }
