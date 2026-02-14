@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -198,6 +199,20 @@ func runBridge(configPath string, verbose bool) error {
 	}
 	if cfg.Bridge.Reactions.Enabled && !cfg.Monitoring.MetricsEnabled {
 		slog.Warn("reactions enabled but metrics disabled; reaction counting requires metrics")
+	}
+
+	// File receive inspector — saves uploaded files to agent workspace
+	if cfg.Bridge.Media.Enabled && cfg.Bridge.Media.Directory != "" {
+		inboxDir := filepath.Join(cfg.Bridge.Media.Directory, "inbox")
+		if err := os.MkdirAll(inboxDir, 0755); err != nil {
+			slog.Error("failed to create inbox directory", "path", inboxDir, "error", err)
+		} else {
+			handler.FileReceiveInspector = &proxy.FileReceiveInspector{
+				InboxDir: inboxDir,
+				Logger:   slog.Default().With("component", "file-receive"),
+			}
+			slog.Info("file receive inspector enabled", "inbox", inboxDir)
+		}
 	}
 
 	// Optional canvas state tracking

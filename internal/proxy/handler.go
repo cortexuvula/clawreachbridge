@@ -31,7 +31,8 @@ type Handler struct {
 	RateLimiter       *security.RateLimiter
 	Metrics           *metrics.Metrics   // optional, nil if metrics disabled
 	MediaInjector     *media.Injector         // optional, nil if media injection disabled
-	ReactionInspector *ReactionInspector      // optional, nil if reactions disabled
+	ReactionInspector    *ReactionInspector    // optional, nil if reactions disabled
+	FileReceiveInspector *FileReceiveInspector // optional, nil if file receive disabled
 	CanvasTracker     *canvas.CanvasTracker   // optional, nil if canvas tracking disabled
 	SyncStore         *chatsync.MessageStore  // optional, nil if sync disabled
 	SyncRegistry      *chatsync.ClientRegistry // optional, nil if sync disabled
@@ -297,6 +298,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			tracker: h.CanvasTracker,
 			a2uiURL: a2uiURL,
 		})
+	}
+
+	// File receive inspector: saves uploaded files to agent workspace.
+	if h.FileReceiveInspector != nil {
+		upstream = append(upstream, h.FileReceiveInspector)
 	}
 
 	// Reaction inspector: client→gateway text messages.
