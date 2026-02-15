@@ -25,6 +25,7 @@ type Injector struct {
 	allowedDirs []string // resolved absolute paths for MEDIA: path validation
 	mu          sync.Mutex
 	runStarts   map[string]time.Time // runId → first delta timestamp
+	sentFiles   map[string]time.Time // filepath → time sent (directory-scan dedup)
 }
 
 // NewInjector creates a media injector with the given config.
@@ -54,6 +55,7 @@ func NewInjector(cfg config.MediaConfig) *Injector {
 		cfg:         cfg,
 		allowedDirs: resolved,
 		runStarts:   make(map[string]time.Time),
+		sentFiles:   make(map[string]time.Time),
 	}
 }
 
@@ -144,13 +146,20 @@ func (inj *Injector) trackDelta(runID string) {
 	inj.cleanStaleLocked()
 }
 
-// cleanStaleLocked removes run entries older than MaxAge. Must be called with mu held.
+// cleanStaleLocked removes run and sentFiles entries older than MaxAge * 2.
+// Must be called with mu held.
 func (inj *Injector) cleanStaleLocked() {
 	cutoff := time.Now().Add(-inj.cfg.MaxAge * 2)
 	for id, t := range inj.runStarts {
 		if t.Before(cutoff) {
 			delete(inj.runStarts, id)
 			slog.Debug("media: cleaned stale run", "runId", id)
+		}
+	}
+	for path, t := range inj.sentFiles {
+		if t.Before(cutoff) {
+			delete(inj.sentFiles, path)
+			slog.Debug("media: cleaned stale sentFile", "path", path)
 		}
 	}
 }
@@ -272,6 +281,14 @@ func (inj *Injector) enrichFinal(outer *outerMessage, chat *chatPayload) ([]byte
 	source := "media_paths"
 	if mediaPathCount == 0 {
 		source = "directory_scan"
+		// Record directory-scan files as sent to prevent re-injection.
+		inj.mu.Lock()
+		now := time.Now()
+		for _, img := range images {
+			fullPath := filepath.Join(inj.cfg.Directory, img.FileName)
+			inj.sentFiles[fullPath] = now
+		}
+		inj.mu.Unlock()
 	}
 
 	msg.Content = append(msg.Content, images...)
@@ -433,7 +450,7 @@ func (inj *Injector) scanImages() []contentItem {
 	}
 
 	var items []contentItem
-	var totalFiles, wrongExt, tooOld, tooLarge int
+	var totalFiles, wrongExt, tooOld, tooLarge, alreadySent int
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
@@ -457,6 +474,18 @@ func (inj *Injector) scanImages() []contentItem {
 			continue
 		}
 
+		fullPath := filepath.Join(inj.cfg.Directory, entry.Name())
+
+		// Skip files already sent via directory scan
+		inj.mu.Lock()
+		_, sent := inj.sentFiles[fullPath]
+		inj.mu.Unlock()
+		if sent {
+			alreadySent++
+			slog.Debug("media: skipping already-sent file", "file", entry.Name())
+			continue
+		}
+
 		// Skip files that exceed MaxFileSize
 		if info.Size() > inj.cfg.MaxFileSize {
 			slog.Warn("media: skipping oversized file", "file", entry.Name(), "size", info.Size(), "maxFileSize", inj.cfg.MaxFileSize)
@@ -464,7 +493,6 @@ func (inj *Injector) scanImages() []contentItem {
 			continue
 		}
 
-		fullPath := filepath.Join(inj.cfg.Directory, entry.Name())
 		data, err := os.ReadFile(fullPath)
 		if err != nil {
 			slog.Warn("media: failed to read image file", "file", fullPath, "error", err)
@@ -500,6 +528,7 @@ func (inj *Injector) scanImages() []contentItem {
 		"wrongExt", wrongExt,
 		"tooOld", tooOld,
 		"tooLarge", tooLarge,
+		"alreadySent", alreadySent,
 		"matched", len(items),
 	)
 
