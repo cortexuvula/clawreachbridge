@@ -136,13 +136,14 @@ func TestProcessMessage_Final_InjectsImages(t *testing.T) {
 		t.Error("decoded image data doesn't match")
 	}
 
-	// Run should be cleaned up
+	// Run entry is kept (not deleted) so multiple connections can process the
+	// same final. Stale cleanup in cleanStaleLocked handles eviction.
 	inj.mu.Lock()
 	_, stillTracked := inj.runStarts["run-456"]
 	inj.mu.Unlock()
 
-	if stillTracked {
-		t.Error("run-456 should be cleaned up after final")
+	if !stillTracked {
+		t.Error("run-456 should still be tracked (cleanup is deferred to cleanStaleLocked)")
 	}
 }
 

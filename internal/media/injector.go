@@ -234,16 +234,11 @@ func (inj *Injector) isPathAllowed(filePath string) bool {
 // falls back to scanning the configured media directory for recent images.
 func (inj *Injector) enrichFinal(outer *outerMessage, chat *chatPayload) ([]byte, error) {
 	// Look up when this run started
-	inj.mu.Lock()
-	runStart, tracked := inj.runStarts[chat.RunID]
-	delete(inj.runStarts, chat.RunID)
-	inj.mu.Unlock()
-
-	if !tracked {
-		// No delta was seen for this run — use MaxAge as a fallback window
-		runStart = time.Now().Add(-inj.cfg.MaxAge)
-		slog.Debug("media: no tracked start for run, using maxAge fallback", "runId", chat.RunID)
-	}
+	// Always use MaxAge window for directory scan instead of tracked runStart.
+	// This ensures files created before the current run (e.g. in a prior tool-use
+	// step) are still picked up, and avoids a race where multiple connections
+	// processing the same final would consume the tracked start inconsistently.
+	runStart := time.Now().Add(-inj.cfg.MaxAge)
 
 	// Parse the message
 	var msg chatMessage
@@ -255,10 +250,10 @@ func (inj *Injector) enrichFinal(outer *outerMessage, chat *chatPayload) ([]byte
 	images := inj.extractMediaPaths(&msg)
 	mediaPathCount := len(images)
 
-	// Strategy 2: Fall back to directory scanning
+	// Strategy 2: Fall back to directory scanning (files within MaxAge window)
 	var dirScanCount int
 	if len(images) == 0 {
-		images = inj.scanImages(runStart)
+		images = inj.scanImages()
 		dirScanCount = len(images)
 	}
 
@@ -418,9 +413,9 @@ func (inj *Injector) extractMediaPaths(msg *chatMessage) []contentItem {
 	return items
 }
 
-// scanImages looks for image files in the media directory that were created
-// after runStart and match the configured extensions.
-func (inj *Injector) scanImages(runStart time.Time) []contentItem {
+// scanImages looks for files in the media directory that were modified
+// within the MaxAge window and match the configured extensions.
+func (inj *Injector) scanImages() []contentItem {
 	if inj.cfg.Directory == "" {
 		slog.Debug("media: directory scan skipped, no directory configured")
 		return nil
@@ -456,13 +451,7 @@ func (inj *Injector) scanImages(runStart time.Time) []contentItem {
 			continue
 		}
 
-		// Only consider files modified after the run started
-		if info.ModTime().Before(runStart) {
-			tooOld++
-			continue
-		}
-
-		// Skip files that are too old (beyond MaxAge from now)
+		// Only consider files within the MaxAge window
 		if time.Since(info.ModTime()) > inj.cfg.MaxAge {
 			tooOld++
 			continue
